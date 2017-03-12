@@ -1,0 +1,137 @@
+                                                                                            
+                hosts visiting www.hack.co.za                                               
+     .----------.                           .-----------------.                             
+    -|   host   |-            ->           -|   description   |-                            
+     `----------'                           `-----------------'                             
+                                                                                            
+imt-border.southglos.gov.uk   -> South Gloucestershire Council                              
+gk-east-5.usps.gov            -> unity states postal service                                
+www.bnl.gov                   -> u.s. department of energy's brookhaven nation laboratory.  
+fw2.nsa.naples.navy.mil       -> u.s. naval support activity                                
+whatzit.wr.usgs.gov           -> western region geologic division                           
+suniem.inel.gov	              -> Idaho National Engineering and Environmental Laboratory    
+p9-120.senate.gov             -> the united states senate                                   
+tasc.dot.gov                  -> u.s. department of Transportation                          
+bosen.nmsc.gov.au             -> national marine safety committee                           
+gatekeeper4.dol.gov           -> united states department of labor                          
+zeke.gov.yk.ca                -> government of yukon                                        
+hostname96-179.gov.sg         -> singapore government                                       
+digger1.defence.gov.au        -> department of defence / australian defence force           
+wcs3.norfolk.nipr.mil         -> norfolk niprnet connectivity                               
+wcs2-cbus.nipr.mil            -> DOD Network Information Center                             
+bugs.dcfl.gov                 -> computer forensics laboratory                              
+fw.uhreg.mil.se               -> swedish military                                           
+linebacker.arl.mil            -> us army research laboratory                                
+scb-portm.scott.disa.mil      -> defense information technology contracting organization    
+ns1.dcitp.gov                 -> defense computer investigations training program           
+mail.northlan.gov.uk          -> north lanarkshire council (scottish local authority)       
+dcx-gw.uscourts.gov           -> the federal judiciary                                      
+mcreed.lan.teale.ca.gov       -> teale data center                                          
+biglost.inel.gov              -> idaho national engineering and environmental laboratory    
+corona.pmel.noaa.gov          -> national oceanic & atmospheric administration              
+cnea.gov.ar                   -> argintine national commisioner of atomic energy            
+m2-87.dsmc.dsm.mil            -> defense systems management college                         
+gate1.mcbh.usmc.mil           -> marine corps base hawaii                                   
+intruder.naswi.navy.mil       -> naval air station whidbey island                           
+incrs01.incirlik.af.mil       -> 39th communications squadron/scbbn                         
+alcatraz.ogn.af.mil           -> hq air force office of special investigation               
+gatekeeper.fbi.gov            -> federal bureau of investigation (fbi)                      
+relay1.ucia.gov               -> central intelligence agency (cia)                          
+blimp.lakehurst.navy.mil      -> navy lakehurst (dod)                                       
+hqda238-225.army.pentagon.mil -> pentagon                                                   
+cofcs71.aphis.usda.gov        -> animal and plant health inspection service                 
+mid_1402.med.navy.mil         -> chief, bureau of medicine and surgery                      
+screamer.hqnet.usda.gov       -> u.s. department of agriculture                             
+relay.nima.mil                -> natl imagery "&" mapping agency                            
+pc124.ocjp.ca.gov             -> office of criminal justice planning                        
+gate1.noc.usmc.mil            -> united states marine corps                                 
+gatekeeper.bop.gov            -> federal bureau of prisons                                  
+2spicy.msfc.nasa.gov          -> nasa's marshall space flight center                        
+dodig.osd.mil                 -> department of defense                                      
+scb-roachr.scott.disa.mil     -> defense information technology contracting organization    
+p722ar.npt.nuwc.navy.mil      -> naval undersea warfare center division newport             
+larcmo.ecs.nasa.gov           -> nasa langley research center                               
+sunspot.gsfc.nasa.gov         -> nasa goddard space flight center                           
+ufd.dtra.mil                  -> defense threat reduction agency                            
+madriver.arl.mil              -> army research lab                                          
+nws14-151.nosc.mil            -> space and naval warfare systems command                    
+grlu5115.cnet.navy.mil        -> naval education and training                               
+m083550.nps.navy.mil          -> the naval postgraduate school                              
+m4407-fw1.ftmeade.army.mil    -> fort meade, maryland                                       
+sun541.nas.nasa.gov           -> nas systems division                                       
+greasy.eris.dera.gov.uk       -> defence evaluation and research agency                     
+proxy.san.mrms.navy.mil       -> commander, naval surface force, u.s. pacific fleet         
+stargate.onizuka.af.mil       -> onizuka air station                                        
+s00dab8.ssa.gov               -> social security online                                     
+cache1.bs.wa.gov.au           -> government of western australia                            
+cofcs71.aphis.usda.gov        -> animal and plant health inspection service                 
+user72-6.aecd.gov.ab.ca       -> government of alberta                                      
+his-155.hih.mil.no            -> army of norway                                             
+pc014109.fmmc.army.mil        -> military district of washington                            
+www.tyndall.af.mil            -> tyndall air force base                                     
+proxy34-ext.nt.tas.gov.au     -> government of tasmania                                     
+wattsh.redstone.army.mil      -> redstone arsenal                                           
+warthog.shaw.af.mil           -> shaw air force base, south carolina                        
+cpq4503412.ospd.ca.gov        -> office of the state public defender                        
+deptvass3-cp.va.gov           -> department of Veterans affairs                             
+m98283.efdsw.navfac.navy.mil  -> southwestdiv, naval facilities engineering command         
+inet04.dcilgp.qld.gov.au      -> department of communication and information                
+n872593.ksc.nasa.gov          -> kennedy space center                                       
+legacy.gsfc.nasa.gov          -> high energy astrophysics science archive research center   
+serv1.opm.gov                 -> us office of personnel management                          
+guam.justice.gov.gu           -> criminal justice automation                                
+parkerb.spmc.gov.sk.ca        -> government of saskatchewan                                 
+sdaf4.agr.gov.sk.ca           -> saskatchewan's department of agriculture and food          
+orgate.or.blm.gov             -> bureau of land management                                  
+hera.webfld.navy.mil          -> communications integration branch                          
+sdecp16003.sannet.gov         -> city hall (san diego)                                      
+ws164.aihw.gov.au             -> australia's national agency for health and welfare         
+jamesa.nfctc.navy.mil         -> naval facilities contract training center                  
+sampa5a.prodam.sp.gov.br      -> city hall of sao paulo                                     
+marshall.state.gov            -> u.s. state department                                      
+enduser.faa.gov               -> federal aviation administration                            
+deptvass-bh.va.gov            -> department of Veterans affairs                             
+pdrgc.palacio.pb.gov.br       -> redencao palace                                            
+seedat.yokota.af.mil          -> yokota air base, japan                                     
+hccafr.hcca.ohio.gov          -> hamilton cooperative association of boards of education    
+ncb30.ncb.gov.sg              -> national computer board, singapore                         
+wp.eris.dera.gov.uk           -> defence evaluation and research agency                     
+starcraft.llnl.gov            -> lawrence livermore national laboratory                     
+mars.rss.gov.jo               -> royal scientific society                                   
+glosnet.gloscc.gov.uk         -> gloucestershire county library                             
+erniekovaks.dewnet.ncsc.mil   -> national computer security center                          
+sorta.kelly.af.mil            -> u.s. air force                                             
+mudd.csap.af.mil              -> u.s. air force                                             
+firewall.scott.af.mil         -> u.s. air force                                             
+ncb12.ncb.gov.sg              -> national computer board, singapore                         
+msproxy.transcom.mil          -> united states transportation command                       
+dodo.nist.gov                 -> national institute of standards and technology             
+doegate.doe.gov               -> u.s. department of energy                                  
+infosrv1.ctd.ornl.gov         -> oak ridge national laboratory                              
+pggpc.ngdc.noaa.gov           -> usdoc/ noaa/ nesdis/ national geophysical data center      
+motorhead.pmel.noaa.gov       -> pacific marine environmental laboratory                    
+marshall.us-state.gov         -> united states department of state                          
+vasfw02.fdic.gov              -> federal deposit insurance corporation                      
+elvis.nellis.af.mil           -> nellis air force base / air warfare center                 
+www.acert.belvoir.army.mil    -> us army garrison fort belvoir                              
+huachuca-wps.army.mil         -> us army                                                    
+ansoc-rd.army.mil             -> us army                                                    
+wattsh.redstone.army.mil      -> redstone arsenal                                           
+hera.webfld.navy.mil          -> (cib) communications intergrated branch                    
+tacusr8.moron.af.mil          -> 496th air base squadron                                    
+fsgate05.randolph.af.mil      -> randolph air force base                                    
+ps1.pbgc.gov                  -> pension benefit guaranty                                   
+pvm.tpg.gov.tw                -> goverment of taiwan                                        
+refmntpc050.afsc.noaa.gov     -> alaska fisheries science center                            
+sn2.plh.af.mil                -> afrl space Vehicles directorate, hanscom research site     
+somerset.gov.uk               -> somerset county council                                    
+guardian.gov.sg               -> singapore government                                       
+aragorn.dpa.act.gov.au        -> the australian commonwealth government entry point         
+proxy1.gov.za                 -> south african government                                   
+proxy2.gov.za                 -> south african government                                   
+hitit.mam.gov.tr              -> netsec                                                     
+josephb.nws.noaa.gov          -> national weather service home page                         
+                              -> u.s. government warnings & forecasts                       
+                                                                                            
+information on the government hosts is available from www.nic.gov                           
+and information on military domains is available from www.nic.mil                           
